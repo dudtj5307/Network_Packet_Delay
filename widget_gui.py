@@ -20,23 +20,32 @@ def create_widgets(self):
     # 창 제목
     self.root.title("Packet Sniffer with Delay")
     # 기본 창 크기 설정
-    self.root.geometry("600x220")
+    self.root.geometry("610x255")
     self.root.resizable(False, False)
 
     # ------------------------------------ Frame 1 ------------------------------------- #
     frame1 = tk.Frame(self.root)
     frame1.pack()
 
-    self.interface_label = tk.Label(frame1, text="Network Interface")
+    # Network Interface 1
+    self.interface_label = tk.Label(frame1, text="Network Interface 1")
     self.interface_label.grid(row=0, column=0, padx=10, pady=10)
 
-    # Network Interface ComboBox
-    self.interface_combobox = ttk.Combobox(frame1, textvariable=self.interfaces, width=58)
-    # self.interface_combobox.pack(padx=10, pady=10)
-    self.interface_combobox.grid(row=0, column=1, padx=10, pady=10)
+    self.interface_combobox1 = ttk.Combobox(frame1, textvariable=self.interfaces1, width=60)
+    self.interface_combobox1.grid(row=0, column=1, padx=10, pady=10)
 
-    self.interface_combobox.bind("<Button-1>", self.update_interfaces)
-    self.interface_combobox.bind("<<ComboboxSelected>>", self.select_interface)
+    self.interface_combobox1.bind("<Button-1>", self.update_interfaces)
+    self.interface_combobox1.bind("<<ComboboxSelected>>", self.select_interface1)
+
+    # Network Interface 2
+    self.interface_label2 = tk.Label(frame1, text="Network Interface 2")
+    self.interface_label2.grid(row=1, column=0, padx=10, pady=10)
+
+    self.interface_combobox2 = ttk.Combobox(frame1, textvariable=self.interfaces2, width=60)
+    self.interface_combobox2.grid(row=1, column=1, padx=10, pady=10)
+
+    self.interface_combobox2.bind("<Button-1>", self.update_interfaces)
+    self.interface_combobox2.bind("<<ComboboxSelected>>", self.select_interface2)
 
     # ------------------------------------ Frame 2 ------------------------------------- #
     frame2 = tk.Frame(self.root)
@@ -115,7 +124,8 @@ def start_button_pressed(self):
     self.delay_entry.config(state=tk.DISABLED)
     self.start_button.config(state=tk.DISABLED)
     self.stop_button.config(state=tk.NORMAL)
-    self.interface_combobox.config(state=tk.DISABLED)
+    self.interface_combobox1.config(state=tk.DISABLED)
+    self.interface_combobox2.config(state=tk.DISABLED)
 
 # 입력칸/버튼 활성화, 비활성화
 def stop_button_pressed(self):
@@ -124,4 +134,5 @@ def stop_button_pressed(self):
     self.delay_entry.config(state=tk.NORMAL)
     self.start_button.config(state=tk.NORMAL)
     self.stop_button.config(state=tk.DISABLED)
-    self.interface_combobox.config(state=tk.NORMAL)
+    self.interface_combobox1.config(state=tk.NORMAL)
+    self.interface_combobox2.config(state=tk.NORMAL)
