@@ -8,6 +8,7 @@ import time
 from collections import deque
 
 import widget_gui
+from sys import exit
 
 Ether, IP, TCP, UDP, ICMP = scapy.Ether, scapy.IP, scapy.TCP, scapy.UDP, scapy.ICMP
 
@@ -23,20 +24,16 @@ class SniffingApp:
         self.loop = None
         self.loop_thread = None
 
-        # Network Interface 저장 변수
-        self.interfaces1 = tk.StringVar()
-        self.interfaces2 = tk.StringVar()
-        self.selected_if = []
-        self.selected_if1 = ""
-        self.selected_if2 = ""
-
-        # Delay Time Setting
-        self.delay_time = 0
+        # Selected Interface Name 1 & 2
+        self.interface_selected = ["", ""]
 
         # IP Setting for analysis
         self.ip1, self.ip2 = '', ''
         self.src_mac1, self.src_mac2 = '', ''
         self.dst_mac1, self.dst_mac2 = '', ''
+
+        # Delay Time Setting
+        self.delay_time = 0
 
         # Packet Monitoring
         self.pkt_detect_num = 0
@@ -48,6 +45,7 @@ class SniffingApp:
         # Flag for printing packets
         self.print_flag = tk.BooleanVar()
         self.print_flag.set(False)
+        scapy.conf.verb = 0
 
         # GUI Elements
         widget_gui.create_widgets(self)
@@ -60,9 +58,9 @@ class SniffingApp:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
-    def sniff_packets(self):
+    def start_sniff_packets(self):
         # Sniffing and processing packets
-        scapy.sniff(iface=self.selected_if,prn=self.packet_callback, store=0,
+        scapy.sniff(iface=self.interface_selected,prn=self.packet_callback, store=0,
                     stop_filter=lambda p: not self.is_sniffing, promisc=True)
 
     def packet_callback(self, packet):
@@ -119,18 +117,19 @@ class SniffingApp:
             packet[Ether].src = self.src_mac2
             packet[Ether].dst = self.dst_mac2
 
-        # 지연 시간 (ms) 후 패킷 전송
-        delay = float(self.delay_entry.get()) / 1000  # ms -> 초로 변환
+        # delay time calculation
+        delay = float(self.delay_time) / 1000  # ms -> 초로 변환
         compensation = time.time() - time_start
-        compensated_delay = max(0.001, delay - compensation)
-        await asyncio.sleep(compensated_delay)  # 비동기적 지연
+        compensated_delay = max(0, delay - compensation)
+        # asynchronous delay
+        if compensated_delay != 0:
+            await asyncio.sleep(compensated_delay)
 
-        # 패킷 보내기 (전송은 스니핑한 패킷을 재전송)
-
+        # Modify MAC Address (Packet Routing)
         if packet[IP].dst == self.ip1:
-            scapy.sendp(packet, iface=self.selected_if[0])
+            scapy.sendp(packet, iface=self.interface_selected[0])
         if packet[IP].dst == self.ip2:
-            scapy.sendp(packet, iface=self.selected_if[1])
+            scapy.sendp(packet, iface=self.interface_selected[1])
         if (self.print_flag.get()):
             print(f"[Sent] Packet sent after delay!\n")
 
@@ -145,23 +144,27 @@ class SniffingApp:
         return scapy.get_if_hwaddr(interface)
 
     def get_dst_mac(self, ip):
-        ans, _ = scapy.arping(ip, timeout=2, verbose=False)
-        for sent, received in ans:
-            return received.hwsrc
-        print(f"Could not find MAC Address for {ip}")
-        return None
+        try:
+            ans, _ = scapy.arping(ip, timeout=2, verbose=False)
+            for sent, received in ans:
+                return received.hwsrc
+            print(f"Could not find MAC Address for {ip}")
+            return None
+        except Exception as e:
+            print(f"Can't send ARP for {ip}. Exception : {e}")
+            return None
 
     def start_sniffing(self):
         if not self.is_sniffing:
-            # Interface Selecting Box Verification
-            if self.selected_if1 == "" or self.selected_if2 == "":
+            # Verification - Interface Selecting Box
+            if "" in self.interface_selected:
                 messagebox.showerror("Network Interface Error", "Please select the Network Interface")
                 return
 
-            # 지연 시간 입력 처리
+            # Verification - Delay Time Input
             try:
                 self.delay_time = float(self.delay_entry.get())
-                if self.delay_time <= 0:
+                if self.delay_time < 0:
                     raise ValueError("Delay time must be a positive number.")
             except ValueError:
                 messagebox.showerror("Delay Time Error", "Please enter a valid delay time in ms.")
@@ -176,8 +179,8 @@ class SniffingApp:
             self.src_mac1, self.src_mac2 = self.get_src_mac(self.ip1), self.get_src_mac(self.ip2)
             self.dst_mac1, self.dst_mac2 = self.get_dst_mac(self.ip1), self.get_dst_mac(self.ip2)
 
-            print(f'(this) src_mac1 : {self.src_mac1}, (ip1) dst_mac1 : {self.dst_mac1}\n'
-                  f'(this) src_mac2 : {self.src_mac2}, (ip2) dst_mac2 : {self.dst_mac2}\n')
+            print(f'[Interface 1] (this) src_mac1 : {self.src_mac1}, (ip1) dst_mac1 : {self.dst_mac1}\n'
+                  f'[Interface 2] (this) src_mac2 : {self.src_mac2}, (ip2) dst_mac2 : {self.dst_mac2}\n')
             if (self.dst_mac2 is None) or (self.dst_mac2 is None):
                 messagebox.showerror("Invalid Connection", "Please check the Network Status.")
                 print("MAC Address Not Found !!\n")
@@ -190,7 +193,7 @@ class SniffingApp:
 
             # Sniffing Process 시작
             self.is_sniffing = True
-            self.sniff_thread = threading.Thread(target=self.sniff_packets, daemon=True)
+            self.sniff_thread = threading.Thread(target=self.start_sniff_packets, daemon=True)
             self.sniff_thread.start()
 
             # 입력칸/버튼 활성화, 비활성화
@@ -204,38 +207,8 @@ class SniffingApp:
         # 입력칸/버튼 활성화, 비활성화
         widget_gui.stop_button_pressed(self)
 
-        print("Sniffing & Delaying Stopped!")
+        print("Sniffing & Delaying Stopped!\n")
 
-    def update_interfaces(self, event=None):
-        interfaces1, interfaces2 = [], []
-        for iface in scapy.conf.ifaces:
-            iface_name = iface
-            try:                   iface_ip = scapy.conf.ifaces[iface].ip
-            except AttributeError: iface_ip = "N/A"  # IP 주소를 가져올 수 없는 경우 처리
-            interfaces1.append((iface_name, iface_ip))
-            interfaces2.append((iface_name, iface_ip))
-        self.interface_combobox1['values'] = interfaces1  # ComboBox 목록 업데이트
-        self.interface_combobox2['values'] = interfaces2  # ComboBox 목록 업데이트
-        self.interfaces1 = interfaces1
-        self.interfaces2 = interfaces2
-
-    def select_interface1(self, event):
-        selected_idx = self.interface_combobox1.current()
-        self.interface_combobox1.set(self.interfaces1[selected_idx])
-        # if selected_idx == 0: self.selected_if1 = scapy.get_if_list()
-        # else:                 self.selected_if1 = self.interfaces2[selected_idx][0]
-        self.selected_if1 = self.interfaces2[selected_idx][0]
-        print("Interface 1 Selected :", self.selected_if1)
-        self.selected_if = [self.selected_if1, self.selected_if2]
-
-    def select_interface2(self, event):
-        selected_idx = self.interface_combobox2.current()
-        self.interface_combobox2.set(self.interfaces2[selected_idx])
-        # if selected_idx == 0: self.selected_if2 = scapy.get_if_list()
-        # else:                 self.selected_if2 = self.interfaces2[selected_idx][0]
-        self.selected_if2 = self.interfaces2[selected_idx][0]
-        print("Interface 2 Selected :", self.selected_if2)
-        self.selected_if = [self.selected_if1, self.selected_if2]
 
 # App 종료 시 처리
 def app_closing():
@@ -249,6 +222,10 @@ if __name__ == "__main__":
     root.protocol("WM_DELETE_WINDOW", app_closing)
 
     app = SniffingApp(root)
+
+    if not scapy.conf.use_pcap:
+        messagebox.showerror("오류", "npcap이 설치되어 있지 않습니다.\n프로그램을 실행하려면 npcap 을 설치해야 합니다.")
+        exit(1)
 
     # Run the GUI application
     root.mainloop()

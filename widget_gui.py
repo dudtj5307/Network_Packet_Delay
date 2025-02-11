@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, Frame
 
+import scapy.all as scapy
+
 # DEFAULT_IP_ADDRESS_1 = '10.30.7.66'
 # DEFAULT_IP_ADDRESS_2 = '10.30.253.157'
 DEFAULT_IP_ADDRESS_1 = '192.168.110.6'
@@ -14,11 +16,9 @@ class LabeledEntry():
         self.label.grid(row=0, column=0, padx=10, pady=10)
         self.entry.grid(row=0, column=1, padx=10, pady=10)
 
-
-
 def create_widgets(self):
     # 창 제목
-    self.root.title("Packet Sniffer with Delay")
+    self.root.title("Packet Router with Delay Function")
     # 기본 창 크기 설정
     self.root.geometry("610x255")
     self.root.resizable(False, False)
@@ -31,21 +31,22 @@ def create_widgets(self):
     self.interface_label = tk.Label(frame1, text="Network Interface 1")
     self.interface_label.grid(row=0, column=0, padx=10, pady=10)
 
-    self.interface_combobox1 = ttk.Combobox(frame1, textvariable=self.interfaces1, width=60)
+    self.interface_combobox1 = ttk.Combobox(frame1, textvariable=self.interface_selected[0], width=60)
     self.interface_combobox1.grid(row=0, column=1, padx=10, pady=10)
-
-    self.interface_combobox1.bind("<Button-1>", self.update_interfaces)
-    self.interface_combobox1.bind("<<ComboboxSelected>>", self.select_interface1)
 
     # Network Interface 2
     self.interface_label2 = tk.Label(frame1, text="Network Interface 2")
     self.interface_label2.grid(row=1, column=0, padx=10, pady=10)
 
-    self.interface_combobox2 = ttk.Combobox(frame1, textvariable=self.interfaces2, width=60)
+    self.interface_combobox2 = ttk.Combobox(frame1, textvariable=self.interface_selected[1], width=60)
     self.interface_combobox2.grid(row=1, column=1, padx=10, pady=10)
 
-    self.interface_combobox2.bind("<Button-1>", self.update_interfaces)
-    self.interface_combobox2.bind("<<ComboboxSelected>>", self.select_interface2)
+    # Function Binding
+    self.interface_combobox1.bind("<Button-1>", update_interfaces(self, self.interface_combobox1))
+    self.interface_combobox1.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 1, event))
+
+    self.interface_combobox2.bind("<Button-1>", update_interfaces(self, self.interface_combobox2))
+    self.interface_combobox2.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 2, event))
 
     # ------------------------------------ Frame 2 ------------------------------------- #
     frame2 = tk.Frame(self.root)
@@ -68,7 +69,7 @@ def create_widgets(self):
     self.ip2_entry.insert(0, DEFAULT_IP_ADDRESS_2)
 
     # Delay Time 입력란
-    self.delay_label = tk.Label(frame2, text="Delay Time (ms):")
+    self.delay_label = tk.Label(frame2, text="Delay Time (ms)")
     self.delay_label.grid(row=2, column=0, padx=10, pady=10)
 
     self.delay_entry = tk.Entry(frame2, justify="center")
@@ -117,6 +118,7 @@ def create_widgets(self):
     self.print_checkbox = tk.Checkbutton(frame2, text="Print Packets", anchor="e", variable=self.print_flag)
     self.print_checkbox.grid(row=3, column=2, padx=10, pady=10)
 
+
 # 입력칸/버튼 활성화, 비활성화
 def start_button_pressed(self):
     self.ip1_entry.config(state=tk.DISABLED)
@@ -136,3 +138,30 @@ def stop_button_pressed(self):
     self.stop_button.config(state=tk.DISABLED)
     self.interface_combobox1.config(state=tk.NORMAL)
     self.interface_combobox2.config(state=tk.NORMAL)
+
+def update_interfaces(self, self_combox, event=None):
+    self.interfaces = []
+    for iface in scapy.conf.ifaces:
+        iface_name = iface
+        try:
+            iface_ds = scapy.conf.ifaces[iface].description
+            iface_ip = scapy.conf.ifaces[iface].ip
+            if iface_ip.replace(" ","") == "": continue
+        except AttributeError: continue
+        self.interfaces.append([[iface_ip, iface_ds],iface_name])
+    # Update ComboBox List
+    self_combox['values'] = list(zip(*self.interfaces))[0]
+
+
+def select_interface(self, num, event):
+    if num == 1:
+        self_if_combobox = self.interface_combobox1
+    else:
+        self_if_combobox = self.interface_combobox2
+
+    selected_idx = self_if_combobox.current()
+    self_if_combobox.set(self_if_combobox['values'][selected_idx])
+    self_if_selected = self.interfaces[selected_idx][1]
+    self.interface_selected[num-1] = self_if_selected
+
+    print(f"Interface {num} Selected :", self.interfaces[selected_idx][0])
