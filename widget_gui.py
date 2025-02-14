@@ -3,8 +3,6 @@ from tkinter import ttk, Frame
 
 import scapy.all as scapy
 
-# DEFAULT_IP_ADDRESS_1 = '10.30.7.66'
-# DEFAULT_IP_ADDRESS_2 = '10.30.253.157'
 DEFAULT_IP_ADDRESS_1 = '192.168.110.6'
 DEFAULT_IP_ADDRESS_2 = '192.168.111.6'
 
@@ -17,9 +15,9 @@ class LabeledEntry():
         self.entry.grid(row=0, column=1, padx=10, pady=10)
 
 def create_widgets(self):
-    # 창 제목
+    # Window Title
     self.root.title("Packet Router with Delay Function")
-    # 기본 창 크기 설정
+    # Window Size
     self.root.geometry("610x255")
     self.root.resizable(False, False)
 
@@ -52,7 +50,7 @@ def create_widgets(self):
     frame2 = tk.Frame(self.root)
     frame2.pack()
 
-    # IP1 입력란
+    # IP 1
     self.ip1_label = tk.Label(frame2, text="Enter IP1 Address")
     self.ip1_label.grid(row=0, column=0, padx=10, pady=10)
 
@@ -60,7 +58,7 @@ def create_widgets(self):
     self.ip1_entry.grid(row=0, column=1, padx=10, pady=10)
     self.ip1_entry.insert(0, DEFAULT_IP_ADDRESS_1)
 
-    # IP2 입력란
+    # IP 2
     self.ip2_label = tk.Label(frame2, text="Enter IP2 Address")
     self.ip2_label.grid(row=1, column=0, padx=10, pady=10)
 
@@ -68,7 +66,7 @@ def create_widgets(self):
     self.ip2_entry.grid(row=1, column=1, padx=10, pady=10)
     self.ip2_entry.insert(0, DEFAULT_IP_ADDRESS_2)
 
-    # Delay Time 입력란
+    # Delay Time
     self.delay_label = tk.Label(frame2, text="Delay Time (ms)")
     self.delay_label.grid(row=2, column=0, padx=10, pady=10)
 
@@ -76,15 +74,15 @@ def create_widgets(self):
     self.delay_entry.grid(row=2, column=1, padx=10, pady=10)
     self.delay_entry.insert(0, "300")
 
-    # Start 버튼
+    # Start Button
     self.start_button = tk.Button(frame2, text="Start", command=self.start_sniffing, width=10)
     self.start_button.grid(row=3, column=0, padx=10, pady=10)
 
-    # Stop 버튼
+    # Stop Button
     self.stop_button = tk.Button(frame2, text="Stop", command=self.stop_sniffing, width=10, state=tk.DISABLED)
     self.stop_button.grid(row=3, column=1, padx=10, pady=10)
 
-    # Detected Packet  No.
+    # Detected Packet No.
     self.pkt_detect_label = tk.Label(frame2, text="Detected Count")
     self.pkt_detect_label.grid(row=0, column=2, padx=10, pady=10)
 
@@ -115,11 +113,11 @@ def create_widgets(self):
     self.pkt_sent_var.set(self.pkt_sent_num)
 
     # Print Packets Checkbox
-    self.print_checkbox = tk.Checkbutton(frame2, text="Print Packets", anchor="e", variable=self.print_flag)
+    self.print_checkbox = tk.Checkbutton(frame2, text="Print Log", anchor="e", variable=self.print_flag)
     self.print_checkbox.grid(row=3, column=2, padx=10, pady=10)
 
 
-# 입력칸/버튼 활성화, 비활성화
+# Start Button Pressed
 def start_button_pressed(self):
     self.ip1_entry.config(state=tk.DISABLED)
     self.ip2_entry.config(state=tk.DISABLED)
@@ -129,7 +127,7 @@ def start_button_pressed(self):
     self.interface_combobox1.config(state=tk.DISABLED)
     self.interface_combobox2.config(state=tk.DISABLED)
 
-# 입력칸/버튼 활성화, 비활성화
+# Stop Button Pressed
 def stop_button_pressed(self):
     self.ip1_entry.config(state=tk.NORMAL)
     self.ip2_entry.config(state=tk.NORMAL)
@@ -139,6 +137,7 @@ def stop_button_pressed(self):
     self.interface_combobox1.config(state=tk.NORMAL)
     self.interface_combobox2.config(state=tk.NORMAL)
 
+# ComboBox Opened
 def update_interfaces(self, self_combox, event=None):
     self.interfaces = []
     for iface in scapy.conf.ifaces:
@@ -152,7 +151,7 @@ def update_interfaces(self, self_combox, event=None):
     # Update ComboBox List
     self_combox['values'] = list(zip(*self.interfaces))[0]
 
-
+# ComboBox Selected
 def select_interface(self, num, event):
     if num == 1:
         self_if_combobox = self.interface_combobox1

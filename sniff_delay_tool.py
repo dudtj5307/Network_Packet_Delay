@@ -3,7 +3,6 @@ import asyncio
 import threading
 import tkinter as tk
 from tkinter import messagebox
-import hashlib
 import time
 from collections import deque
 
@@ -66,70 +65,63 @@ class SniffingApp:
     def packet_callback(self, packet):
         if (not packet.haslayer(Ether)) or (not packet.haslayer(IP)):
             return
-
-        pkt_text = packet.summary()
-        # 해쉬 중복값 검사
-        current_pkt_hash = hashlib.md5(pkt_text.encode()).hexdigest()
-        if current_pkt_hash == self.last_pkt_hash:
+        if   packet.haslayer(TCP):  pkt_chksum = packet[TCP].chksum;
+        elif packet.haslayer(UDP):  pkt_chksum = packet[UDP].chksum;
+        elif packet.haslayer(ICMP): pkt_chksum = packet[ICMP].chksum;
+        else:
             return
-        self.last_pkt_hash = current_pkt_hash
 
-        if packet.haslayer(IP) and (packet.haslayer(TCP) or packet.haslayer(UDP) or packet.haslayer(ICMP)):
-            # Not to resend duplicate packet
-            if packet[IP].id in self.pkt_idq:
-                return
-            self.pkt_idq.append(packet[IP].id)
+        # For compensating time delay
+        parse_start_time= time.time()
 
-            parse_time_start = time.time()
-            try:
-                pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
-            except ValueError:
-                print("Error parsing packet:", pkt_text)
-                return
+        # Not to resend duplicate packet
+        if (packet[IP].id, pkt_chksum) in self.pkt_idq:
+            return
+        self.pkt_idq.append((packet[IP].id, pkt_chksum))
 
-            # Printing all detected packets
+        # IP src/dst parsing
+        pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
+        if (self.print_flag.get()):
+            s1, s2 = pkt_ip1.split('.'), pkt_ip2.split('.')
+            print(f"Packet {s1[0]:>3}.{s1[1]:>3}.{s1[2]:>3}.{s1[3]:>3} > "
+                         f"{s2[0]:>3}.{s2[1]:>3}.{s2[2]:>3}.{s2[3]:>3} detected!")
+
+        # Packet Processing for Target IPs
+        if (pkt_ip1, pkt_ip2) in [(self.ip1, self.ip2), (self.ip2, self.ip1)]:
+            self.pkt_detect_num += 1
+            self.pkt_detect_var.set(self.pkt_detect_num)
+
             if (self.print_flag.get()):
-                s1, s2 = pkt_ip1.split('.'), pkt_ip2.split('.')
-                print(f"Packet {s1[0]:>3}.{s1[1]:>3}.{s1[2]:>3}.{s1[3]:>3} > "
-                             f"{s2[0]:>3}.{s2[1]:>3}.{s2[2]:>3}.{s2[3]:>3} detected!")
+                print(f"[Processing] {pkt_ip1} -> {pkt_ip2} packet!")
 
-            # IP1과 IP2에 대해 각각 패킷을 처리
-            if (pkt_ip1, pkt_ip2) in [(self.ip1, self.ip2), (self.ip2, self.ip1)]:
-                self.pkt_detect_num += 1
-                self.pkt_detect_var.set(self.pkt_detect_num)
+            # Route MAC Address
+            if packet[IP].dst == self.ip1:
+                packet[Ether].src = self.src_mac1
+                packet[Ether].dst = self.dst_mac1
+            elif packet[IP].dst == self.ip2:
+                packet[Ether].src = self.src_mac2
+                packet[Ether].dst = self.dst_mac2
 
-                if (self.print_flag.get()):
-                    print(f"[Processing] {pkt_ip1} -> {pkt_ip2} packet!")
-                if self.loop and self.loop.is_running():
-                    asyncio.run_coroutine_threadsafe(self.send_packet_with_delay(packet, parse_time_start), self.loop)
-            # else:
-            #     if self.loop and self.loop.is_running():
-            #         asyncio.run_coroutine_threadsafe(self.send_packet_with_delay(packet, parse_time_start), self.loop)
+            # Asynchronous Function Run
+            if self.loop and self.loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.send_packet_with_delay(packet, parse_start_time), self.loop)
 
-    async def send_packet_with_delay(self, packet, time_start):
+    async def send_packet_with_delay(self, packet, start_time):
         self.pkt_process_num += 1
         self.pkt_process_var.set(self.pkt_process_num)
 
-        if packet[IP].dst == self.ip1:
-            packet[Ether].src = self.src_mac1
-            packet[Ether].dst = self.dst_mac1
-        elif packet[IP].dst == self.ip2:
-            packet[Ether].src = self.src_mac2
-            packet[Ether].dst = self.dst_mac2
-
-        # delay time calculation
+        # Delay time calculation with compensation
         delay = float(self.delay_time) / 1000  # ms -> 초로 변환
-        compensation = time.time() - time_start
+        compensation = time.time() - start_time
         compensated_delay = max(0, delay - compensation)
-        # asynchronous delay
+        # Asynchronous Delay
         if compensated_delay != 0:
             await asyncio.sleep(compensated_delay)
 
-        # Modify MAC Address (Packet Routing)
-        if packet[IP].dst == self.ip1:
-            scapy.sendp(packet, iface=self.interface_selected[0])
-        if packet[IP].dst == self.ip2:
-            scapy.sendp(packet, iface=self.interface_selected[1])
+        # Send Packets by L2
+        if packet[IP].dst == self.ip1: scapy.sendp(packet, iface=self.interface_selected[0])
+        if packet[IP].dst == self.ip2: scapy.sendp(packet, iface=self.interface_selected[1])
+
         if (self.print_flag.get()):
             print(f"[Sent] Packet sent after delay!\n")
 
