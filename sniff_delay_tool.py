@@ -11,6 +11,24 @@ from sys import exit
 
 Ether, IP, TCP, UDP, ICMP = scapy.Ether, scapy.IP, scapy.TCP, scapy.UDP, scapy.ICMP
 
+
+def get_src_mac(dst_ip):
+    # 대상 IP로 가는 경로의 인터페이스를 가져옴
+    interface = scapy.conf.route.route(dst_ip)[0]
+    return scapy.get_if_hwaddr(interface)
+
+def get_dst_mac(ip):
+    try:
+        ans, _ = scapy.arping(ip, timeout=2, verbose=False)
+        for sent, received in ans:
+            return received.hwsrc
+        print(f"Could not find MAC Address for {ip}")
+        return None
+    except Exception as e:
+        print(f"Can't send ARP for {ip}. Exception : {e}")
+        return None
+
+
 class SniffingApp:
     def __init__(self, root):
         self.root = root
@@ -50,6 +68,61 @@ class SniffingApp:
         widget_gui.create_widgets(self)
 
         print("\nInit Complete & GUI created!")
+
+    def start_sniffing(self):
+        if not self.is_sniffing:
+            # Verification - Interface Selecting Box
+            if "" in self.interface_selected:
+                messagebox.showerror("Network Interface Error", "Please select the Network Interface")
+                return
+
+            # Verification - Delay Time Input
+            try:
+                self.delay_time = float(self.delay_entry.get())
+                if self.delay_time < 0:
+                    raise ValueError("Delay time must be a positive number.")
+            except ValueError:
+                messagebox.showerror("Delay Time Error", "Please enter a valid delay time in ms.")
+                return
+
+            # IP 주소 입력 처리
+            self.ip1 = self.ip1_entry.get().replace(" ","")
+            self.ip2 = self.ip2_entry.get().replace(" ","")
+            print(f'\nFinding MAC Address... \n{self.ip1} <-> Me <-> {self.ip2}')
+
+            # Mac 주소 가져오기
+            self.src_mac1, self.src_mac2 = get_src_mac(self.ip1), get_src_mac(self.ip2)
+            self.dst_mac1, self.dst_mac2 = get_dst_mac(self.ip1), get_dst_mac(self.ip2)
+
+            print(f'[Interface 1] (this) src_mac1 : {self.src_mac1}, (ip1) dst_mac1 : {self.dst_mac1}\n'
+                  f'[Interface 2] (this) src_mac2 : {self.src_mac2}, (ip2) dst_mac2 : {self.dst_mac2}\n')
+            if (self.dst_mac2 is None) or (self.dst_mac2 is None):
+                messagebox.showerror("Invalid Connection", "Please check the Network Status.")
+                print("MAC Address Not Found !!\n")
+                return
+
+            # 이벤트 루프 스레드 시작
+            if self.loop_thread is None:
+                self.loop_thread = threading.Thread(target=self.start_event_loop, daemon=True)
+                self.loop_thread.start()
+
+            # Sniffing Process 시작
+            self.is_sniffing = True
+            self.sniff_thread = threading.Thread(target=self.start_sniff_packets, daemon=True)
+            self.sniff_thread.start()
+
+            # 입력칸/버튼 활성화, 비활성화
+            widget_gui.start_button_pressed(self)
+
+            print("Sniffing & Delaying Started!")
+
+    def stop_sniffing(self):
+        self.is_sniffing = False
+
+        # 입력칸/버튼 활성화, 비활성화
+        widget_gui.stop_button_pressed(self)
+
+        print("Sniffing & Delaying Stopped!\n")
 
     def start_event_loop(self):
         """이벤트 루프를 별도의 스레드에서 실행"""
@@ -129,77 +202,6 @@ class SniffingApp:
         self.pkt_sent_num += 1
         self.pkt_process_var.set(self.pkt_process_num)
         self.pkt_sent_var.set(self.pkt_sent_num)
-
-    def get_src_mac(self, dst_ip):
-        # 대상 IP로 가는 경로의 인터페이스를 가져옴
-        interface = scapy.conf.route.route(dst_ip)[0]
-        return scapy.get_if_hwaddr(interface)
-
-    def get_dst_mac(self, ip):
-        try:
-            ans, _ = scapy.arping(ip, timeout=2, verbose=False)
-            for sent, received in ans:
-                return received.hwsrc
-            print(f"Could not find MAC Address for {ip}")
-            return None
-        except Exception as e:
-            print(f"Can't send ARP for {ip}. Exception : {e}")
-            return None
-
-    def start_sniffing(self):
-        if not self.is_sniffing:
-            # Verification - Interface Selecting Box
-            if "" in self.interface_selected:
-                messagebox.showerror("Network Interface Error", "Please select the Network Interface")
-                return
-
-            # Verification - Delay Time Input
-            try:
-                self.delay_time = float(self.delay_entry.get())
-                if self.delay_time < 0:
-                    raise ValueError("Delay time must be a positive number.")
-            except ValueError:
-                messagebox.showerror("Delay Time Error", "Please enter a valid delay time in ms.")
-                return
-
-            # IP 주소 입력 처리
-            self.ip1 = self.ip1_entry.get().replace(" ","")
-            self.ip2 = self.ip2_entry.get().replace(" ","")
-            print(f'\nFinding MAC Address... \n{self.ip1} <-> Me <-> {self.ip2}')
-
-            # Mac 주소 가져오기
-            self.src_mac1, self.src_mac2 = self.get_src_mac(self.ip1), self.get_src_mac(self.ip2)
-            self.dst_mac1, self.dst_mac2 = self.get_dst_mac(self.ip1), self.get_dst_mac(self.ip2)
-
-            print(f'[Interface 1] (this) src_mac1 : {self.src_mac1}, (ip1) dst_mac1 : {self.dst_mac1}\n'
-                  f'[Interface 2] (this) src_mac2 : {self.src_mac2}, (ip2) dst_mac2 : {self.dst_mac2}\n')
-            if (self.dst_mac2 is None) or (self.dst_mac2 is None):
-                messagebox.showerror("Invalid Connection", "Please check the Network Status.")
-                print("MAC Address Not Found !!\n")
-                return
-
-            # 이벤트 루프 스레드 시작
-            if self.loop_thread is None:
-                self.loop_thread = threading.Thread(target=self.start_event_loop, daemon=True)
-                self.loop_thread.start()
-
-            # Sniffing Process 시작
-            self.is_sniffing = True
-            self.sniff_thread = threading.Thread(target=self.start_sniff_packets, daemon=True)
-            self.sniff_thread.start()
-
-            # 입력칸/버튼 활성화, 비활성화
-            widget_gui.start_button_pressed(self)
-
-            print("Sniffing & Delaying Started!")
-
-    def stop_sniffing(self):
-        self.is_sniffing = False
-
-        # 입력칸/버튼 활성화, 비활성화
-        widget_gui.stop_button_pressed(self)
-
-        print("Sniffing & Delaying Stopped!\n")
 
 
 # App 종료 시 처리
