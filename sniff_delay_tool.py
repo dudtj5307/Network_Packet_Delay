@@ -67,6 +67,7 @@ class SniffingApp:
         # GUI Elements
         widget_gui.create_widgets(self)
 
+        print("ⓒ 2025,LIG Nex1-YoungSuh Lee,All rights reserved.")
         print("\nInit Complete & GUI created!")
 
     def start_sniffing(self):
@@ -145,7 +146,7 @@ class SniffingApp:
             return
 
         # For compensating time delay
-        parse_start_time= time.time()
+        parse_start_time = time.time()
 
         # Not to resend duplicate packet
         if (packet[IP].id, pkt_chksum) in self.pkt_idq:
@@ -156,8 +157,8 @@ class SniffingApp:
         pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
         if (self.print_flag.get()):
             s1, s2 = pkt_ip1.split('.'), pkt_ip2.split('.')
-            print(f"Packet {s1[0]:>3}.{s1[1]:>3}.{s1[2]:>3}.{s1[3]:>3} > "
-                         f"{s2[0]:>3}.{s2[1]:>3}.{s2[2]:>3}.{s2[3]:>3} detected!")
+            print(f"[Detected] Packet {s1[0]:>3}.{s1[1]:>3}.{s1[2]:>3}.{s1[3]:>3} > "
+                                    f"{s2[0]:>3}.{s2[1]:>3}.{s2[2]:>3}.{s2[3]:>3}")
 
         # Packet Processing for Target IPs
         if (pkt_ip1, pkt_ip2) in [(self.ip1, self.ip2), (self.ip2, self.ip1)]:
@@ -191,7 +192,7 @@ class SniffingApp:
         if compensated_delay != 0:
             await asyncio.sleep(compensated_delay)
 
-        # Send Packets by L2
+        # Send Packets by Ethernet (Layer 2)
         if packet[IP].dst == self.ip1: scapy.sendp(packet, iface=self.interface_selected[0])
         if packet[IP].dst == self.ip2: scapy.sendp(packet, iface=self.interface_selected[1])
 
@@ -204,7 +205,7 @@ class SniffingApp:
         self.pkt_sent_var.set(self.pkt_sent_num)
 
 
-# App 종료 시 처리
+# Closing App
 def app_closing():
     app.stop_sniffing()  # 모든 Task 취소
     root.destroy()
@@ -212,13 +213,13 @@ def app_closing():
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Packet Sniffer")
-
     root.protocol("WM_DELETE_WINDOW", app_closing)
 
     app = SniffingApp(root)
 
     if not scapy.conf.use_pcap:
-        messagebox.showerror("오류", "npcap이 설치되어 있지 않습니다.\n프로그램을 실행하려면 npcap 을 설치해야 합니다.")
+        messagebox.showerror("Error", "\"Npcap\" is not installed."
+                                      "\nPlease install \"Npcap\" with 'Winpcap API-compatible mode'")
         exit(1)
 
     # Run the GUI application

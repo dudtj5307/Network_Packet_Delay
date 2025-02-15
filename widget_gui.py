@@ -16,7 +16,7 @@ class LabeledEntry():
 
 def create_widgets(self):
     # Window Title
-    self.root.title("Packet Router with Delay Function")
+    self.root.title("Delayed Packet Router")
     # Window Size
     self.root.geometry("610x255")
     self.root.resizable(False, False)
