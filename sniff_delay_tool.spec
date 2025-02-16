@@ -5,7 +5,7 @@ a = Analysis(
     ['sniff_delay_tool.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('widget/sniff_delay_tool.ico', 'widget')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['sniff_delay_tool.ico'],
+    icon=['widget\\sniff_delay_tool.ico'],
 )
