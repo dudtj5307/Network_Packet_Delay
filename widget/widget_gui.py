@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, Frame
+from tkinter import ttk, Frame, messagebox
 
 import scapy.all as scapy
 import os, sys
@@ -28,7 +28,7 @@ def create_widgets(self):
     self.root.iconbitmap(icon_path)
 
     # ------------------------------------ Frame 1 ------------------------------------- #
-    frame1 = tk.Frame(self.root)
+    frame1 = Frame(self.root)
     frame1.pack()
 
     self.toggle = ToggleSwitch(frame1, width=70, height=18)
@@ -58,7 +58,7 @@ def create_widgets(self):
     self.interface_combobox2.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 2, event))
 
     # ------------------------------------ Frame 2 ------------------------------------- #
-    frame2 = tk.Frame(self.root)
+    frame2 = Frame(self.root)
     frame2.pack()
 
     # IP 1
@@ -118,6 +118,38 @@ def create_widgets(self):
     self.print_checkbox = tk.Checkbutton(frame2, text="Print Log", anchor="e", variable=self.print_flag)
     self.print_checkbox.grid(row=3, column=2, padx=10, pady=10)
 
+def invalid_ip(ip_str):
+    ips = ip_str.strip().split('.')
+    if len(ips) != 4: return True
+    for ip in ips:
+        if not ip.isdigit(): return True
+        if int(ip) < 0 or int(ip) > 255: return True
+    return False
+
+# Input Validation
+def check_input_validation(self):
+    try:
+        # Check Validation - Interface Selecting Box
+        if "" in self.interface_selected:
+            raise ValueError("InterfaceError")
+        # Check Validation - IP Address Format
+        if invalid_ip(self.ip1_entry.get()) or invalid_ip(self.ip2_entry.get()):
+            raise ValueError("IPAddressError")
+        # Check Validation - Delay Time Input
+        self.delay_time = float(self.delay_entry.get())
+        if self.delay_time < 0:
+            raise ValueError("DelayTimeError")
+
+    except ValueError as error:
+        error_type = str(error)
+        if error_type == "InterfaceError":
+            messagebox.showerror("Network Interface Error", "Please select the Network Interface")
+        elif error_type == "IPAddressError":
+            messagebox.showerror("Invalid IP Address","IP Address entered in invalid format.\nex) 192.168.110.6")
+        elif error_type == "DelayTimeError":
+            messagebox.showerror("Delay Time Error", "Please enter a valid delay time in ms.\n(range ≥ 0)")
+        return True
+    return False
 
 # Start Button Pressed
 def start_button_pressed(self):
@@ -173,3 +205,26 @@ def select_interface(self, num, event):
     self.interface_selected[num-1] = self_if_selected
 
     print(f"Interface {num} Selected :", self.interfaces[selected_idx][0])
+
+def pkt_sent_update(self):
+    if self.stop_event.is_set():
+        return
+    # Get Sent Count from Multiprocess Queue
+    count = 0
+    # while not self.sent_queue.empty():
+    #     t = self.sent_queue.get()
+    #     print("GUI Update", t)
+    #     count += self.sent_queue.get()  # 큐에서 꺼낸 값을 더함
+    try:
+        while True:
+            count += self.sent_queue.get_nowait()
+    except Exception:
+        # print("No que")
+        pass
+
+    # Update Packet Monitoring
+    self.pkt_process_num -= count
+    self.pkt_process_var.set(self.pkt_process_num)
+    self.pkt_sent_num += count
+    self.pkt_sent_var.set(self.pkt_sent_num)
+    return self.root.after(100, pkt_sent_update, self)
