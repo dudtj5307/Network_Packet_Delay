@@ -11,6 +11,7 @@ import hashlib
 from widget import widget_gui
 
 Ether, IP, TCP, UDP, ICMP, ARP = scapy.Ether, scapy.IP, scapy.TCP, scapy.UDP, scapy.ICMP, scapy.ARP
+IP_FLAG_MF = 1     # [IP] Flag : More Fragments (0 0 1)
 
 def get_src_mac(dst_ip):
     # 대상 IP로 가는 경로의 인터페이스를 가져옴
@@ -76,7 +77,7 @@ class SniffingApp:
         widget_gui.create_widgets(self)
 
         print("ⓒ 2025,LIG Nex1-YoungSuh Lee,All rights reserved.")
-        print("Last Revision : 2025.02.16 Distribution version 0")
+        print("Last Revision : 2025.02.17 Distribution version 0.2")
         print("\nInit Complete & GUI created!")
 
     def start_sniffing(self):
@@ -157,6 +158,7 @@ class SniffingApp:
                     filter=bpf_filter, stop_filter=lambda p: not self.is_sniffing, promisc=True)
 
     def packet_bridging(self, packet):
+        # ARP Packets
         if packet.haslayer(ARP):
             # For compensating time delay
             parse_start_time = time.time()
@@ -184,17 +186,18 @@ class SniffingApp:
             if self.loop and self.loop.is_running():
                 asyncio.run_coroutine_threadsafe(self.send_packet_with_delay(packet, parse_start_time), self.loop)
 
+        # TCP/UDP/ICMP Packet - send without changing MAC Address
         else:
-            # TCP/UDP/ICMP Packet - send without changing MAC Address
             self.packet_routing(packet, change_MAC=False)
 
 
     def packet_routing(self, packet, change_MAC=True):
         if (not packet.haslayer(Ether)) or (not packet.haslayer(IP)):
             return
-        if   packet.haslayer(TCP):  pkt_chksum = packet[TCP].chksum;
-        elif packet.haslayer(UDP):  pkt_chksum = packet[UDP].chksum;
-        elif packet.haslayer(ICMP): pkt_chksum = packet[ICMP].chksum;
+        if   packet.haslayer(TCP):  pkt_chksum = packet[TCP].chksum;  pkt_protocol = "TCP"
+        elif packet.haslayer(UDP):  pkt_chksum = packet[UDP].chksum;  pkt_protocol = "UDP"
+        elif packet[IP].proto==17:  pkt_chksum = packet[IP].frag   ;  pkt_protocol = "UDP-seg"
+        elif packet.haslayer(ICMP): pkt_chksum = packet[ICMP].chksum; pkt_protocol = "ICMP"
         else:
             return
 
@@ -202,9 +205,9 @@ class SniffingApp:
         parse_start_time = time.time()
 
         # Not to resend duplicate packet
-        if (packet[IP].id, pkt_chksum) in self.pkt_idq:
+        if (packet[IP].chksum, pkt_chksum) in self.pkt_idq:
             return
-        self.pkt_idq.append((packet[IP].id, pkt_chksum))
+        self.pkt_idq.append((packet[IP].chksum, pkt_chksum))
 
         # IP src/dst parsing
         pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
@@ -219,7 +222,7 @@ class SniffingApp:
             self.pkt_detect_var.set(self.pkt_detect_num)
 
             if (self.print_flag.get()):
-                print(f"[Detected] Packet {pkt_ip1} -> {pkt_ip2}")
+                print(f"[Detected] {pkt_protocol} {pkt_ip1} -> {pkt_ip2}")
 
             # Route MAC Address
             if change_MAC:
@@ -247,8 +250,6 @@ class SniffingApp:
             await asyncio.sleep(compensated_delay)
 
         # Send Packets by Ethernet (Layer 2)
-        # if packet[IP].dst == self.ip1: scapy.sendp(packet, iface=self.interface_selected[0])
-        # if packet[IP].dst == self.ip2: scapy.sendp(packet, iface=self.interface_selected[1])
         if packet.sniffed_on == self.interface_selected[0]: scapy.sendp(packet, iface=self.interface_selected[1])
         if packet.sniffed_on == self.interface_selected[1]: scapy.sendp(packet, iface=self.interface_selected[0])
 
@@ -281,4 +282,3 @@ if __name__ == "__main__":
 
     # Run the GUI application
     root.mainloop()
-

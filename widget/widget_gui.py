@@ -143,8 +143,8 @@ def stop_button_pressed(self):
     self.delay_entry.config(state=tk.NORMAL)
     self.start_button.config(state=tk.NORMAL)
     self.stop_button.config(state=tk.DISABLED)
-    self.interface_combobox1.config(state=tk.NORMAL)
-    self.interface_combobox2.config(state=tk.NORMAL)
+    self.interface_combobox1.config(state="readonly")
+    self.interface_combobox2.config(state="readonly")
     # Toggle Button Enable
     self.toggle.enable()
 
