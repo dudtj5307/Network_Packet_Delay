@@ -1,8 +1,10 @@
-import tkinter as tk
-from tkinter import ttk, Frame, messagebox
+import os, sys
 
 import scapy.all as scapy
-import os, sys
+from scapy.arch import get_windows_if_list
+
+import tkinter as tk
+from tkinter import ttk, Frame, messagebox
 
 from widget.toggleSwitch import ToggleSwitch
 
@@ -40,21 +42,21 @@ def create_widgets(self):
     self.interface_label = tk.Label(frame1, text="Network Interface 1")
     self.interface_label.grid(row=1, column=0, padx=10, pady=5)
 
-    self.interface_combobox1 = ttk.Combobox(frame1, textvariable=self.interface_selected[0], width=60, state="readonly")
+    self.interface_combobox1 = ttk.Combobox(frame1, textvariable=self.selected_interface[0], width=60, state="readonly")
     self.interface_combobox1.grid(row=1, column=1, padx=10, pady=5)
 
     # Network Interface 2
     self.interface_label2 = tk.Label(frame1, text="Network Interface 2")
     self.interface_label2.grid(row=2, column=0, padx=10, pady=7)
 
-    self.interface_combobox2 = ttk.Combobox(frame1, textvariable=self.interface_selected[1], width=60, state="readonly")
+    self.interface_combobox2 = ttk.Combobox(frame1, textvariable=self.selected_interface[1], width=60, state="readonly")
     self.interface_combobox2.grid(row=2, column=1, padx=10, pady=7)
 
     # Function Binding
-    self.interface_combobox1.bind("<Button-1>", update_interfaces(self, self.interface_combobox1))
+    self.interface_combobox1.bind("<Button-1>", lambda event: update_interfaces(self, self.interface_combobox1))
     self.interface_combobox1.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 1, event))
 
-    self.interface_combobox2.bind("<Button-1>", update_interfaces(self, self.interface_combobox2))
+    self.interface_combobox2.bind("<Button-1>", lambda event: update_interfaces(self, self.interface_combobox2))
     self.interface_combobox2.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 2, event))
 
     # ------------------------------------ Frame 2 ------------------------------------- #
@@ -130,7 +132,7 @@ def invalid_ip(ip_str):
 def check_input_validation(self):
     try:
         # Check Validation - Interface Selecting Box
-        if "" in self.interface_selected:
+        if "" in self.selected_interface:
             raise ValueError("InterfaceError")
         # Check Validation - IP Address Format
         if invalid_ip(self.ip1_entry.get()) or invalid_ip(self.ip2_entry.get()):
@@ -181,16 +183,37 @@ def stop_button_pressed(self):
     self.toggle.enable()
 
 # ComboBox Opened
-def update_interfaces(self, self_combox, event=None):
+def update_interfaces2(self, self_combox, event=None):
+    # Update Network Interface
     self.interfaces = []
     for iface in scapy.conf.ifaces:
         iface_name = iface
+        print(iface_name)
         try:
             iface_ip = scapy.conf.ifaces[iface].ip
             iface_ds = scapy.conf.ifaces[iface].description
             if iface_ip.replace(" ","") == "": continue
         except AttributeError: continue
         self.interfaces.append([[iface_ip, iface_ds],iface_name])
+    # Update ComboBox List
+    self_combox['values'] = list(zip(*self.interfaces))[0]
+
+
+# ComboBox Opened
+def update_interfaces(self, self_combox, event=None):
+    # Update Network Interface
+    self.interfaces = []
+    for iface in get_windows_if_list():
+        if len(iface['ips']) == 0:              continue
+        if "loopback" in iface['name'].lower(): continue
+
+        iface_name        = f"{iface['name']}"
+        iface_description = f"{iface['name']} {iface['description']}"
+        for ip in iface['ips']:
+            if(all(map(lambda x: x.isdecimal(), ip.split('.')))):
+                iface_ip = ip
+                self.interfaces.append([[iface_ip, iface_description], iface_name])
+
     # Update ComboBox List
     self_combox['values'] = list(zip(*self.interfaces))[0]
 
@@ -202,25 +225,20 @@ def select_interface(self, num, event):
     selected_idx = self_if_combobox.current()
     self_if_combobox.set(self_if_combobox['values'][selected_idx])
     self_if_selected = self.interfaces[selected_idx][1]
-    self.interface_selected[num-1] = self_if_selected
+    self.selected_interface[num-1] = self_if_selected
 
     print(f"Interface {num} Selected :", self.interfaces[selected_idx][0])
 
+# Sent Packet Number Update
 def pkt_sent_update(self):
-    if self.stop_event.is_set():
-        return
+    if self.stop_event.is_set(): return
+
     # Get Sent Count from Multiprocess Queue
     count = 0
-    # while not self.sent_queue.empty():
-    #     t = self.sent_queue.get()
-    #     print("GUI Update", t)
-    #     count += self.sent_queue.get()  # 큐에서 꺼낸 값을 더함
     try:
         while True:
             count += self.sent_queue.get_nowait()
-    except Exception:
-        # print("No que")
-        pass
+    except Exception: pass
 
     # Update Packet Monitoring
     self.pkt_process_num -= count
