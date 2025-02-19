@@ -1,9 +1,9 @@
 import time
 from sys import exit
-from collections import deque, OrderedDict
+from collections import deque, OrderedDict, defaultdict
 import hashlib
 import threading
-import multiprocessing as mp
+import multiprocessing
 
 import scapy.all as scapy
 
@@ -11,6 +11,16 @@ import tkinter as tk
 from tkinter import messagebox
 
 from widget import widget_gui
+
+'''
+                    __main__()        packet_multiprocessor()
+                   _ _ _ _ _ _    (IPC)    _ _ _ _ _ _ 
+   sniff()        |           |  packets  |           |  
+  thread 1  --->  |   parent  |  ------>  |   child   |  sendp()
+  thread 2  --->  |  process  |  <------  |  process  |  ------>  
+                  |_ _ _ _ _ _|  sentNum  |_ _ _ _ _ _|
+                                  (IPC)
+'''
 
 Ether, IP, TCP, UDP, ICMP, ARP = scapy.Ether, scapy.IP, scapy.TCP, scapy.UDP, scapy.ICMP, scapy.ARP
 IP_FLAG_MF = 1     # [IP] Flag : More Fragments (0 0 1)
@@ -31,8 +41,8 @@ def get_dst_mac(ip):
         print(f"Can't send ARP for {ip}. Exception : {e}")
         return None
 
-
-def packet_multiprocessor(mp_que, stop_event, infos):
+# Child Process
+def packet_multiprocessor(q_pkt_from_parent, stop_event, infos):
     scapy.conf.verb = 0
     # Information from Main Thread
     delay_ms, selected_interface, sent_que = infos
@@ -43,12 +53,11 @@ def packet_multiprocessor(mp_que, stop_event, infos):
     # Deque for saving (packet, start time)
     packets_deque = deque()
     while not stop_event.is_set():
-        # Get Packets from mp_queue
+        # Get Packets from Parent Process
         try:
             recvCount = 0
             while True and recvCount < 5:
-                # pkt, start_time = mp_que.get_nowait()
-                packets_deque.append(mp_que.get_nowait())
+                packets_deque.append(q_pkt_from_parent.get_nowait())
                 recvCount += 1
         except Exception:
             pass
@@ -79,9 +88,9 @@ class SniffingApp:
 
         # Multiprocessing for Delayed Sending
         self.process = None
-        self.stop_event = mp.Event()
-        self.mp_queue = mp.Queue()
-        self.sent_queue = mp.Queue()
+        self.stop_event = multiprocessing.Event()
+        self.q_packet_to_child = multiprocessing.Queue()
+        self.q_sentNum_to_parent = multiprocessing.Queue()
 
         # Selected Mode
         self.mode_selected = "Routing"
@@ -107,7 +116,7 @@ class SniffingApp:
 
         # Duplicate Packet Filter
         self.pkt_id_que = deque([], maxlen=2000)
-        self.arp_cache = OrderedDict()
+        self.arp_cache = defaultdict(float)
         self.arp_ttl = 10               # Time-to-Live
 
         # Flag for printing packets
@@ -119,7 +128,7 @@ class SniffingApp:
         widget_gui.create_widgets(self)
 
         print("ⓒ 2025,LIG Nex1-YoungSuh Lee,All rights reserved.")
-        print("Last Revision : 2025.02.19 Distribution version 1.3")
+        print("Last Revision : 2025.02.20 Distribution Version 1.4")
         print("\nInit Complete & GUI created!")
 
     def start_sniffing(self):
@@ -150,15 +159,15 @@ class SniffingApp:
             if self.process is None or not self.process.is_alive():
                 # Initialize
                 self.stop_event.clear()
-                self.mp_queue = mp.Queue()
-                self.sent_queue = mp.Queue()
+                self.q_packet_to_child = multiprocessing.Queue()
+                self.q_sentNum_to_parent = multiprocessing.Queue()
 
-                gui_infos = (self.delay_time, self.selected_interface, self.sent_queue)
-                self.process = mp.Process(target=packet_multiprocessor,
-                                          args=(self.mp_queue, self.stop_event, gui_infos), daemon=True)
+                gui_infos = (self.delay_time, self.selected_interface, self.q_sentNum_to_parent)
+                self.process = multiprocessing.Process(target=packet_multiprocessor,
+                                          args=(self.q_packet_to_child, self.stop_event, gui_infos), daemon=True)
                 self.process.start()
 
-                # Sent Packet from Multiprocessor
+                # Update Sent Number of packets from Multiprocessor
                 self.update_id = widget_gui.pkt_sent_update(self)
 
             # Sniffing Thread
@@ -192,100 +201,93 @@ class SniffingApp:
         # Routing
         if self.mode_selected == "Routing":
             bpf_filter = "tcp or udp or icmp"
-            packet_callback = self.packet_routing
             promisc_mode = False
+
         # Bridging
         else:
             bpf_filter = "tcp or udp or icmp or arp"
-            packet_callback = self.packet_bridging
             promisc_mode = True
 
         # Sniffing and processing packets
-        scapy.sniff(iface=interface, prn=packet_callback, store=False,
-                    filter=bpf_filter, stop_filter=lambda p: not self.is_sniffing, promisc=promisc_mode)
+        scapy.sniff(iface=interface, prn=self.packet_callback, store=False, promisc=promisc_mode,
+                    filter=bpf_filter, stop_filter=lambda p: not self.is_sniffing)
 
-    def packet_bridging(self, packet):
-        # ARP Packets
-        if packet.haslayer(ARP):
+    def arp_recently_sent(self, packet):
+        # Packet Hash Save
+        arp_id = f"{packet.op}{packet.hwsrc}{packet.psrc}{packet.hwdst}{packet.pdst}"
+        arp_hash = hashlib.md5(arp_id.encode()).hexdigest()
+
+        # ARP Cache TTL Check
+        now = time.time()
+        if now - self.arp_cache[arp_hash] > self.arp_ttl:
+            self.arp_cache[arp_hash] = now
+            return False
+        else:
+            return True
+
+    def packet_callback(self, packet):
+        # Ethernet Packet Process
+        if not packet.haslayer(Ether):
+            return
+
+        # L2 Packets (ARP)
+        if packet.haslayer(ARP) and self.mode_selected == "Bridging":
+            # For compensating time delay
+            parse_start_time = time.time()
+
+            # Check if this arp is recently sent
+            if self.arp_recently_sent(packet):
+                return
+            pkt_protocol = "ARP"
+
+            if (self.print_flag.get()):
+                print(f"[Detected] ARP {pkt_protocol} -> {packet.pdst} {'Request' if packet.op == 1 else 'Reply'}")
+
+        # L3 Packets (TCP, UDP, UDP-segments, ICMP)
+        elif packet.haslayer(IP):
+            if   packet.haslayer(TCP):  pkt_chksum = packet[TCP].chksum;  pkt_protocol = "TCP"
+            elif packet.haslayer(UDP):  pkt_chksum = packet[UDP].chksum;  pkt_protocol = "UDP"
+            elif packet[IP].proto==17:  pkt_chksum = packet[IP].frag   ;  pkt_protocol = "UDP-seg"
+            elif packet.haslayer(ICMP): pkt_chksum = packet[ICMP].chksum; pkt_protocol = "ICMP"
+            else:
+                return
 
             # For compensating time delay
             parse_start_time = time.time()
 
-            # Packet Hash Save
-            arp_id = f"{packet.op}{packet.hwsrc}{packet.psrc}{packet.hwdst}{packet.pdst}"
-            arp_hash = hashlib.md5(arp_id.encode()).hexdigest()
-
-            # ARP Cache TTL Check
-            now = time.time()
-            for key in list(self.arp_cache.keys()):
-                if now - self.arp_cache[key] > self.arp_ttl:
-                    del self.arp_cache[key]
-            if arp_hash in self.arp_cache:
+            # Not to resend duplicate packet
+            if (packet[IP].chksum, pkt_chksum) in self.pkt_id_que:
                 return
-            self.arp_cache[arp_hash] = now
+            self.pkt_id_que.append((packet[IP].chksum, pkt_chksum))
 
-            self.pkt_detect_num += 1
-            self.pkt_detect_var.set(self.pkt_detect_num)
+            # Packet IP check
+            pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
 
-            if (self.print_flag.get()):
-                print(f"[Detected] ARP {packet.psrc} -> {packet.pdst} {'Request' if packet.op==1 else 'Reply'}")
+            if (pkt_ip1, pkt_ip2) not in [(self.ip1, self.ip2), (self.ip2, self.ip1)]:
+                return
 
-            # Handover to Packet Multiprocessor
-            self.mp_queue.put((packet, parse_start_time))
-            self.pkt_process_num += 1
-            self.pkt_process_var.set(self.pkt_process_num)
-
-        # TCP/UDP/ICMP Packet - send without changing MAC Address
-        else:
-            self.packet_routing(packet, change_MAC=False)
-
-
-    def packet_routing(self, packet, change_MAC=True):
-        if (not packet.haslayer(Ether)) or (not packet.haslayer(IP)):
-            return
-        if   packet.haslayer(TCP):  pkt_chksum = packet[TCP].chksum;  pkt_protocol = "TCP"
-        elif packet.haslayer(UDP):  pkt_chksum = packet[UDP].chksum;  pkt_protocol = "UDP"
-        elif packet[IP].proto==17:  pkt_chksum = packet[IP].frag   ;  pkt_protocol = "UDP-seg"
-        elif packet.haslayer(ICMP): pkt_chksum = packet[ICMP].chksum; pkt_protocol = "ICMP"
-        else:
-            return
-
-        # For compensating time delay
-        parse_start_time = time.time()
-
-        # Not to resend duplicate packet
-        if (packet[IP].chksum, pkt_chksum) in self.pkt_id_que:
-            return
-        self.pkt_id_que.append((packet[IP].chksum, pkt_chksum))
-
-        # IP src/dst parsing
-        pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
-        # if (self.print_flag.get()):
-        #     s1, s2 = pkt_ip1.split('.'), pkt_ip2.split('.')
-        #     print(f"Packet {s1[0]:>3}.{s1[1]:>3}.{s1[2]:>3}.{s1[3]:>3} > "
-        #                             f"{s2[0]:>3}.{s2[1]:>3}.{s2[2]:>3}.{s2[3]:>3}")
-
-        # Packet Processing for Target IPs
-        if (pkt_ip1, pkt_ip2) in [(self.ip1, self.ip2), (self.ip2, self.ip1)]:
-            self.pkt_detect_num += 1
-            self.pkt_detect_var.set(self.pkt_detect_num)
+            # Route MAC Address
+            if packet[IP].dst == self.ip1:
+                packet[Ether].src = self.src_mac1
+                packet[Ether].dst = self.dst_mac1
+            elif packet[IP].dst == self.ip2:
+                packet[Ether].src = self.src_mac2
+                packet[Ether].dst = self.dst_mac2
 
             if (self.print_flag.get()):
                 print(f"[Detected] {pkt_protocol} {pkt_ip1} -> {pkt_ip2}")
 
-            # Route MAC Address
-            if change_MAC:
-                if packet[IP].dst == self.ip1:
-                    packet[Ether].src = self.src_mac1
-                    packet[Ether].dst = self.dst_mac1
-                elif packet[IP].dst == self.ip2:
-                    packet[Ether].src = self.src_mac2
-                    packet[Ether].dst = self.dst_mac2
+        else:
+            return
 
-            # Handover to Packet Multiprocessor
-            self.mp_queue.put((packet, parse_start_time))
-            self.pkt_process_num += 1
-            self.pkt_process_var.set(self.pkt_process_num)
+        # Sending Packets to Child Process
+        self.q_packet_to_child.put((packet, parse_start_time))
+
+        # Packet Monitoring Update
+        self.pkt_detect_num += 1
+        self.pkt_detect_var.set(self.pkt_detect_num)
+        self.pkt_process_num += 1
+        self.pkt_process_var.set(self.pkt_process_num)
 
 
 # Closing App
@@ -294,7 +296,7 @@ def app_closing():
     root.destroy()
 
 if __name__ == "__main__":
-    mp.freeze_support()
+    multiprocessing.freeze_support()
     root = tk.Tk()
     root.title("Packet Sniffer")
     root.protocol("WM_DELETE_WINDOW", app_closing)

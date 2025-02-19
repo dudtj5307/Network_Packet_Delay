@@ -237,7 +237,7 @@ def pkt_sent_update(self):
     count = 0
     try:
         while True:
-            count += self.sent_queue.get_nowait()
+            count += self.q_sentNum_to_parent.get_nowait()
     except Exception: pass
 
     # Update Packet Monitoring
