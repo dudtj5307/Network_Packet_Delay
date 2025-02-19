@@ -1,12 +1,14 @@
-import scapy.all as scapy
-import asyncio
-import threading
-import tkinter as tk
-from tkinter import messagebox
 import time
 from sys import exit
 from collections import deque, OrderedDict
 import hashlib
+import threading
+import multiprocessing as mp
+
+import scapy.all as scapy
+
+import tkinter as tk
+from tkinter import messagebox
 
 from widget import widget_gui
 
@@ -30,22 +32,62 @@ def get_dst_mac(ip):
         return None
 
 
+def packet_multiprocessor(mp_que, stop_event, infos):
+    scapy.conf.verb = 0
+    # Information from Main Thread
+    delay_ms, selected_interface, sent_que = infos
+
+    # Delay time calculation with compensation
+    delay = float(delay_ms) / 1000  # ms -> 초로 변환
+
+    # Deque for saving (packet, start time)
+    packets_deque = deque()
+    while not stop_event.is_set():
+        # Get Packets from mp_queue
+        try:
+            recvCount = 0
+            while True and recvCount < 5:
+                # pkt, start_time = mp_que.get_nowait()
+                packets_deque.append(mp_que.get_nowait())
+                recvCount += 1
+        except Exception:
+            pass
+        # Send packet after delay time
+        sentCount = 0
+        while packets_deque and sentCount < 5:
+            pkt, start_time = packets_deque[0]
+            if time.time() - start_time >= delay:
+                # Send Packets by Ethernet (Layer 2)
+                if pkt.sniffed_on == selected_interface[0]: scapy.sendp(pkt, iface=selected_interface[1]);
+                if pkt.sniffed_on == selected_interface[1]: scapy.sendp(pkt, iface=selected_interface[0]);
+                packets_deque.popleft()
+                sentCount += 1
+            else:
+                break
+        if sentCount > 0:
+            sent_que.put(sentCount)
+        time.sleep(0.00001)
+
+
 class SniffingApp:
     def __init__(self, root):
         self.root = root
 
-        self.sniff_thread = None
+        self.sniff_thread1 = None
+        self.sniff_thread2 = None
         self.is_sniffing = False
 
-        # 이벤트 루프를 별도의 스레드에서 실행하기 위한 설정
-        self.loop = None
-        self.loop_thread = None
+        # Multiprocessing for Delayed Sending
+        self.process = None
+        self.stop_event = mp.Event()
+        self.mp_queue = mp.Queue()
+        self.sent_queue = mp.Queue()
 
         # Selected Mode
         self.mode_selected = "Routing"
 
         # Selected Interface Name 1 & 2
-        self.interface_selected = ["", ""]
+        self.selected_interface = ["", ""]
 
         # IP Setting for analysis
         self.ip1, self.ip2 = '', ''
@@ -64,7 +106,7 @@ class SniffingApp:
         self.pkt_sent_var.set(str(self.pkt_sent_num))
 
         # Duplicate Packet Filter
-        self.pkt_idq = deque([], maxlen=2000)
+        self.pkt_id_que = deque([], maxlen=2000)
         self.arp_cache = OrderedDict()
         self.arp_ttl = 10               # Time-to-Live
 
@@ -77,36 +119,26 @@ class SniffingApp:
         widget_gui.create_widgets(self)
 
         print("ⓒ 2025,LIG Nex1-YoungSuh Lee,All rights reserved.")
-        print("Last Revision : 2025.02.17 Distribution version 0.2")
+        print("Last Revision : 2025.02.19 Distribution version 1.3")
         print("\nInit Complete & GUI created!")
 
     def start_sniffing(self):
         if not self.is_sniffing:
             self.mode_selected = self.toggle.get_current_mode()
 
-            # Verification - Interface Selecting Box
-            if "" in self.interface_selected:
-                messagebox.showerror("Network Interface Error", "Please select the Network Interface")
+            # Input Validation
+            error = widget_gui.check_input_validation(self)
+            if error:
                 return
 
-            # Verification - Delay Time Input
-            try:
-                self.delay_time = float(self.delay_entry.get())
-                if self.delay_time < 0:
-                    raise ValueError("Delay time must be a positive number.")
-            except ValueError:
-                messagebox.showerror("Delay Time Error", "Please enter a valid delay time in ms.\n(range ≥ 0)")
-                return
-
-            # IP 주소 입력 처리
+            # IP Address Processing
             self.ip1 = self.ip1_entry.get().replace(" ","")
             self.ip2 = self.ip2_entry.get().replace(" ","")
             print(f'\n[{self.ip1}] <-> [Me] <-> [{self.ip2}]\nFinding MAC Address... ')
 
-            # Mac 주소 가져오기
+            # Find MAC Address by processing ARP
             self.src_mac1, self.src_mac2 = get_src_mac(self.ip1), get_src_mac(self.ip2)
             self.dst_mac1, self.dst_mac2 = get_dst_mac(self.ip1), get_dst_mac(self.ip2)
-
             print(f'[Interface 1] (this) src_mac1 : {self.src_mac1}, (ip1) dst_mac1 : {self.dst_mac1}\n'
                   f'[Interface 2] (this) src_mac2 : {self.src_mac2}, (ip2) dst_mac2 : {self.dst_mac2}\n')
             if (self.dst_mac2 is None) or (self.dst_mac2 is None):
@@ -114,52 +146,68 @@ class SniffingApp:
                 print("MAC Address Not Found !!\n")
                 return
 
-            # 이벤트 루프 스레드 시작
-            if self.loop_thread is None:
-                self.loop_thread = threading.Thread(target=self.start_event_loop, daemon=True)
-                self.loop_thread.start()
+            # Packet Multiprocessor
+            if self.process is None or not self.process.is_alive():
+                # Initialize
+                self.stop_event.clear()
+                self.mp_queue = mp.Queue()
+                self.sent_queue = mp.Queue()
 
-            # Sniffing Process 시작
+                gui_infos = (self.delay_time, self.selected_interface, self.sent_queue)
+                self.process = mp.Process(target=packet_multiprocessor,
+                                          args=(self.mp_queue, self.stop_event, gui_infos), daemon=True)
+                self.process.start()
+
+                # Sent Packet from Multiprocessor
+                self.update_id = widget_gui.pkt_sent_update(self)
+
+            # Sniffing Thread
             self.is_sniffing = True
-            self.sniff_thread = threading.Thread(target=self.start_sniff_packets, daemon=True)
-            self.sniff_thread.start()
+            self.sniff_thread1 = threading.Thread(target=self.sniff_packets, daemon=True, args=(self.selected_interface[0],))
+            self.sniff_thread2 = threading.Thread(target=self.sniff_packets, daemon=True, args=(self.selected_interface[1],))
+            self.sniff_thread1.start()
+            self.sniff_thread2.start()
 
             # 입력칸/버튼 활성화, 비활성화
             widget_gui.start_button_pressed(self)
 
-            print("Sniffing & Delaying Started!")
+            print(f"{self.mode_selected} Started!")
 
     def stop_sniffing(self):
         self.is_sniffing = False
+
+        if self.process and self.process.is_alive():
+            self.stop_event.set()  # 이벤트 플래그를 세워 프로세스에게 종료 신호 전달
+            time.sleep(0.2)
+            self.process.terminate()
+
+            self.root.after_cancel(self.update_id)
 
         # 입력칸/버튼 활성화, 비활성화
         widget_gui.stop_button_pressed(self)
 
         print("Sniffing & Delaying Stopped!\n")
 
-    def start_event_loop(self):
-        """이벤트 루프를 별도의 스레드에서 실행"""
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
-
-    def start_sniff_packets(self):
+    def sniff_packets(self, interface=None):
         # Routing
         if self.mode_selected == "Routing":
-            bpf_filter = "ip"
+            bpf_filter = "tcp or udp or icmp"
             packet_callback = self.packet_routing
+            promisc_mode = False
         # Bridging
         else:
-            bpf_filter = "arp or ip or vlan"
+            bpf_filter = "tcp or udp or icmp or arp"
             packet_callback = self.packet_bridging
+            promisc_mode = True
 
         # Sniffing and processing packets
-        scapy.sniff(iface=self.interface_selected, prn=packet_callback, store=False,
-                    filter=bpf_filter, stop_filter=lambda p: not self.is_sniffing, promisc=True)
+        scapy.sniff(iface=interface, prn=packet_callback, store=False,
+                    filter=bpf_filter, stop_filter=lambda p: not self.is_sniffing, promisc=promisc_mode)
 
     def packet_bridging(self, packet):
         # ARP Packets
         if packet.haslayer(ARP):
+
             # For compensating time delay
             parse_start_time = time.time()
 
@@ -182,9 +230,10 @@ class SniffingApp:
             if (self.print_flag.get()):
                 print(f"[Detected] ARP {packet.psrc} -> {packet.pdst} {'Request' if packet.op==1 else 'Reply'}")
 
-            # Asynchronous Function Run
-            if self.loop and self.loop.is_running():
-                asyncio.run_coroutine_threadsafe(self.send_packet_with_delay(packet, parse_start_time), self.loop)
+            # Handover to Packet Multiprocessor
+            self.mp_queue.put((packet, parse_start_time))
+            self.pkt_process_num += 1
+            self.pkt_process_var.set(self.pkt_process_num)
 
         # TCP/UDP/ICMP Packet - send without changing MAC Address
         else:
@@ -205,9 +254,9 @@ class SniffingApp:
         parse_start_time = time.time()
 
         # Not to resend duplicate packet
-        if (packet[IP].chksum, pkt_chksum) in self.pkt_idq:
+        if (packet[IP].chksum, pkt_chksum) in self.pkt_id_que:
             return
-        self.pkt_idq.append((packet[IP].chksum, pkt_chksum))
+        self.pkt_id_que.append((packet[IP].chksum, pkt_chksum))
 
         # IP src/dst parsing
         pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
@@ -233,33 +282,10 @@ class SniffingApp:
                     packet[Ether].src = self.src_mac2
                     packet[Ether].dst = self.dst_mac2
 
-            # Asynchronous Function Run
-            if self.loop and self.loop.is_running():
-                asyncio.run_coroutine_threadsafe(self.send_packet_with_delay(packet, parse_start_time), self.loop)
-
-    async def send_packet_with_delay(self, packet, start_time):
-        self.pkt_process_num += 1
-        self.pkt_process_var.set(self.pkt_process_num)
-
-        # Delay time calculation with compensation
-        delay = float(self.delay_time) / 1000  # ms -> 초로 변환
-        compensation = time.time() - start_time
-        compensated_delay = max(0, delay - compensation)
-        # Asynchronous Delay
-        if compensated_delay != 0:
-            await asyncio.sleep(compensated_delay)
-
-        # Send Packets by Ethernet (Layer 2)
-        if packet.sniffed_on == self.interface_selected[0]: scapy.sendp(packet, iface=self.interface_selected[1])
-        if packet.sniffed_on == self.interface_selected[1]: scapy.sendp(packet, iface=self.interface_selected[0])
-
-        if (self.print_flag.get()):
-            print(f"[Sent] Packet sent after delay!\n")
-
-        self.pkt_process_num -= 1
-        self.pkt_process_var.set(self.pkt_process_num)
-        self.pkt_sent_num += 1
-        self.pkt_sent_var.set(self.pkt_sent_num)
+            # Handover to Packet Multiprocessor
+            self.mp_queue.put((packet, parse_start_time))
+            self.pkt_process_num += 1
+            self.pkt_process_var.set(self.pkt_process_num)
 
 
 # Closing App
@@ -268,9 +294,9 @@ def app_closing():
     root.destroy()
 
 if __name__ == "__main__":
+    mp.freeze_support()
     root = tk.Tk()
     root.title("Packet Sniffer")
-
     root.protocol("WM_DELETE_WINDOW", app_closing)
 
     app = SniffingApp(root)
