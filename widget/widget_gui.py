@@ -33,10 +33,9 @@ def create_widgets(self):
     frame1 = Frame(self.root)
     frame1.pack()
 
+    # Toggle Switch for mode selection
     self.toggle = ToggleSwitch(frame1, width=70, height=18)
     self.toggle.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-    # For temporary implementation
-    # self.toggle.disable()      # TBD
 
     # Network Interface 1
     self.interface_label = tk.Label(frame1, text="Network Interface 1")
@@ -163,10 +162,10 @@ def start_button_pressed(self):
     self.interface_combobox1.config(state=tk.DISABLED)
     self.interface_combobox2.config(state=tk.DISABLED)
     # Packet Counter Reset
-    self.pkt_detect_num, self.pkt_process_num, self.pkt_sent_num = 0, 0, 0
+    self.pkt_detect_num, self.pkt_process_num, self.pkt_sent_num.value = 0, 0, 0
     self.pkt_detect_var.set(str(self.pkt_detect_num))
     self.pkt_process_var.set(str(self.pkt_process_num))
-    self.pkt_sent_var.set(str(self.pkt_sent_num))
+    self.pkt_sent_var.set(str(self.pkt_sent_num.value))
     # Toggle Button Disable
     self.toggle.disable()
 
@@ -233,16 +232,10 @@ def select_interface(self, num, event):
 def pkt_sent_update(self):
     if self.stop_event.is_set(): return
 
-    # Get Sent Count from Multiprocess Queue
-    count = 0
-    try:
-        while True:
-            count += self.q_sentNum_to_parent.get_nowait()
-    except Exception: pass
+    # Get Sent Number from 'self.pkt_sent_num' (Shared Memory)
+    with self.pkt_sent_num.get_lock():
+        self.pkt_process_var.set(self.pkt_process_num - self.pkt_sent_num.value)
+        self.pkt_sent_var.set(self.pkt_sent_num.value)
 
     # Update Packet Monitoring
-    self.pkt_process_num -= count
-    self.pkt_process_var.set(self.pkt_process_num)
-    self.pkt_sent_num += count
-    self.pkt_sent_var.set(self.pkt_sent_num)
-    return self.root.after(100, pkt_sent_update, self)
+    return self.root.after(100, pkt_sent_update, self)  # Update Every 100 ms

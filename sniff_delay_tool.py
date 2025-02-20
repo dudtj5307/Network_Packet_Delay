@@ -1,6 +1,6 @@
 import time
 from sys import exit
-from collections import deque, OrderedDict, defaultdict
+from collections import deque, defaultdict
 import hashlib
 import threading
 import multiprocessing
@@ -17,9 +17,9 @@ from widget import widget_gui
                    _ _ _ _ _ _    (IPC)    _ _ _ _ _ _ 
    sniff()        |           |  packets  |           |  
   thread 1  --->  |   parent  |  ------>  |   child   |  sendp()
-  thread 2  --->  |  process  |  <------  |  process  |  ------>  
+  thread 2  --->  |  process  |  <----->  |  process  |  ------>  
                   |_ _ _ _ _ _|  sentNum  |_ _ _ _ _ _|
-                                  (IPC)
+                                  (SM)
 '''
 
 Ether, IP, TCP, UDP, ICMP, ARP = scapy.Ether, scapy.IP, scapy.TCP, scapy.UDP, scapy.ICMP, scapy.ARP
@@ -45,37 +45,33 @@ def get_dst_mac(ip):
 def packet_multiprocessor(q_pkt_from_parent, stop_event, infos):
     scapy.conf.verb = 0
     # Information from Main Thread
-    delay_ms, selected_interface, sent_que = infos
+    delay_ms, selected_interface, pkt_sent_num = infos
 
     # Delay time calculation with compensation
     delay = float(delay_ms) / 1000  # ms -> 초로 변환
 
     # Deque for saving (packet, start time)
-    packets_deque = deque()
+    pkt_deque = deque()
     while not stop_event.is_set():
         # Get Packets from Parent Process
         try:
-            recvCount = 0
-            while True and recvCount < 5:
-                packets_deque.append(q_pkt_from_parent.get_nowait())
-                recvCount += 1
+            while True:
+                pkt_deque.append(q_pkt_from_parent.get_nowait())
         except Exception:
             pass
-        # Send packet after delay time
-        sentCount = 0
-        while packets_deque and sentCount < 5:
-            pkt, start_time = packets_deque[0]
+        # Check delayed time and send
+        while pkt_deque:
+            pkt, start_time = pkt_deque[0]
             if time.time() - start_time >= delay:
                 # Send Packets by Ethernet (Layer 2)
                 if pkt.sniffed_on == selected_interface[0]: scapy.sendp(pkt, iface=selected_interface[1]);
                 if pkt.sniffed_on == selected_interface[1]: scapy.sendp(pkt, iface=selected_interface[0]);
-                packets_deque.popleft()
-                sentCount += 1
+                pkt_deque.popleft()
+                # Sent Number Update
+                with pkt_sent_num.get_lock():
+                    pkt_sent_num.value += 1
             else:
                 break
-        if sentCount > 0:
-            sent_que.put(sentCount)
-        time.sleep(0.00001)
 
 
 class SniffingApp:
@@ -88,9 +84,8 @@ class SniffingApp:
 
         # Multiprocessing for Delayed Sending
         self.process = None
-        self.stop_event = multiprocessing.Event()
-        self.q_packet_to_child = multiprocessing.Queue()
-        self.q_sentNum_to_parent = multiprocessing.Queue()
+        self.stop_event = multiprocessing.Event()           # Flag for Stopping Child Process
+        self.q_packet_to_child = multiprocessing.Queue()    # Queue for Delivering Packet to Child Process
 
         # Selected Mode
         self.mode_selected = "Routing"
@@ -98,26 +93,26 @@ class SniffingApp:
         # Selected Interface Name 1 & 2
         self.selected_interface = ["", ""]
 
-        # IP Setting for analysis
-        self.ip1, self.ip2 = '', ''
-        self.src_mac1, self.src_mac2 = '', ''
-        self.dst_mac1, self.dst_mac2 = '', ''
+        # IP/MAC Setting
+        self.ip1, self.src_mac1, self.dst_mac1  = '', '', ''
+        self.ip2, self.src_mac2, self.dst_mac2 = '', '', ''
 
-        # Delay Time Setting
+        # Delay Time Input
         self.delay_time = 0
 
         # Packet Monitoring
-        self.pkt_detect_num, self.pkt_process_num, self.pkt_sent_num = 0, 0, 0
-        self.pkt_detect_var, self.pkt_process_var, self.pkt_sent_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        self.pkt_detect_var,  self.pkt_detect_num   = tk.StringVar(), 0
+        self.pkt_process_var, self.pkt_process_num  = tk.StringVar(), 0
+        self.pkt_sent_var,    self.pkt_sent_num     = tk.StringVar(), multiprocessing.Value('i',0)
 
         self.pkt_detect_var.set(str(self.pkt_detect_num))
         self.pkt_process_var.set(str(self.pkt_process_num))
-        self.pkt_sent_var.set(str(self.pkt_sent_num))
+        self.pkt_sent_var.set(str(self.pkt_sent_num.value))
 
         # Duplicate Packet Filter
         self.pkt_id_que = deque([], maxlen=2000)
         self.arp_cache = defaultdict(float)
-        self.arp_ttl = 10               # Time-to-Live
+        self.arp_ttl = 10   # ARPTime-to-Live
 
         # Flag for printing packets
         self.print_flag = tk.BooleanVar()
@@ -128,7 +123,7 @@ class SniffingApp:
         widget_gui.create_widgets(self)
 
         print("ⓒ 2025,LIG Nex1-YoungSuh Lee,All rights reserved.")
-        print("Last Revision : 2025.02.20 Distribution Version 1.4")
+        print("Last Revision : 2025.02.21 Distribution Version 1.4")
         print("\nInit Complete & GUI created!")
 
     def start_sniffing(self):
@@ -160,15 +155,11 @@ class SniffingApp:
                 # Initialize
                 self.stop_event.clear()
                 self.q_packet_to_child = multiprocessing.Queue()
-                self.q_sentNum_to_parent = multiprocessing.Queue()
 
-                gui_infos = (self.delay_time, self.selected_interface, self.q_sentNum_to_parent)
+                gui_infos = (self.delay_time, self.selected_interface, self.pkt_sent_num)
                 self.process = multiprocessing.Process(target=packet_multiprocessor,
                                           args=(self.q_packet_to_child, self.stop_event, gui_infos), daemon=True)
                 self.process.start()
-
-                # Update Sent Number of packets from Multiprocessor
-                self.update_id = widget_gui.pkt_sent_update(self)
 
             # Sniffing Thread
             self.is_sniffing = True
@@ -177,7 +168,10 @@ class SniffingApp:
             self.sniff_thread1.start()
             self.sniff_thread2.start()
 
-            # 입력칸/버튼 활성화, 비활성화
+            # [Sent Number Entry] Periodic Update
+            self.update_id = widget_gui.pkt_sent_update(self)
+
+            # [Button, Entry] Enable/Disable
             widget_gui.start_button_pressed(self)
 
             print(f"{self.mode_selected} Started!")
@@ -186,13 +180,14 @@ class SniffingApp:
         self.is_sniffing = False
 
         if self.process and self.process.is_alive():
-            self.stop_event.set()  # 이벤트 플래그를 세워 프로세스에게 종료 신호 전달
+            self.stop_event.set()
             time.sleep(0.2)
             self.process.terminate()
 
-            self.root.after_cancel(self.update_id)
+        # [Sent Number Entry] Stop Update
+        self.root.after_cancel(self.update_id)
 
-        # 입력칸/버튼 활성화, 비활성화
+        # [Button, Entry] Enable/Disable
         widget_gui.stop_button_pressed(self)
 
         print("Sniffing & Delaying Stopped!\n")
@@ -232,7 +227,7 @@ class SniffingApp:
 
         # L2 Packets (ARP)
         if packet.haslayer(ARP) and self.mode_selected == "Bridging":
-            # For compensating time delay
+            # Record start time of parsing
             parse_start_time = time.time()
 
             # Check if this arp is recently sent
@@ -241,7 +236,8 @@ class SniffingApp:
             pkt_protocol = "ARP"
 
             if (self.print_flag.get()):
-                print(f"[Detected] ARP {pkt_protocol} -> {packet.pdst} {'Request' if packet.op == 1 else 'Reply'}")
+                print(f"[Detected] {pkt_protocol} {packet.psrc} -> {packet.pdst} "
+                      f"{'Request' if packet.op==1 else 'Reply'}  ", flush=True)
 
         # L3 Packets (TCP, UDP, UDP-segments, ICMP)
         elif packet.haslayer(IP):
@@ -251,8 +247,7 @@ class SniffingApp:
             elif packet.haslayer(ICMP): pkt_chksum = packet[ICMP].chksum; pkt_protocol = "ICMP"
             else:
                 return
-
-            # For compensating time delay
+            # Record start time of parsing
             parse_start_time = time.time()
 
             # Not to resend duplicate packet
@@ -260,9 +255,8 @@ class SniffingApp:
                 return
             self.pkt_id_que.append((packet[IP].chksum, pkt_chksum))
 
-            # Packet IP check
+            # Packet IP filtering
             pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
-
             if (pkt_ip1, pkt_ip2) not in [(self.ip1, self.ip2), (self.ip2, self.ip1)]:
                 return
 
@@ -275,8 +269,7 @@ class SniffingApp:
                 packet[Ether].dst = self.dst_mac2
 
             if (self.print_flag.get()):
-                print(f"[Detected] {pkt_protocol} {pkt_ip1} -> {pkt_ip2}")
-
+                print(f"[Detected] {pkt_protocol} {pkt_ip1} -> {pkt_ip2} ")
         else:
             return
 
@@ -285,14 +278,14 @@ class SniffingApp:
 
         # Packet Monitoring Update
         self.pkt_detect_num += 1
-        self.pkt_detect_var.set(self.pkt_detect_num)
         self.pkt_process_num += 1
+        self.pkt_detect_var.set(self.pkt_detect_num)
         self.pkt_process_var.set(self.pkt_process_num)
 
 
-# Closing App
+# Called when closing 'SniffingApp'
 def app_closing():
-    app.stop_sniffing()  # 모든 Task 취소
+    app.stop_sniffing()
     root.destroy()
 
 if __name__ == "__main__":
