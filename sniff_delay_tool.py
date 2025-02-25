@@ -1,3 +1,5 @@
+import os
+import psutil
 import time
 from sys import exit
 from collections import deque, defaultdict
@@ -6,14 +8,16 @@ import threading
 import multiprocessing
 
 import scapy.all as scapy
+from scapy.arch import get_windows_if_list
 
 import tkinter as tk
 from tkinter import messagebox
 
 from widget import widget_gui
 
+LAST_UPDATE, VERSION = "2025.02.25", "v1.4"
 '''
-                    __main__()        packet_multiprocessor()
+                    __main__()          packet_delay_send()
                    _ _ _ _ _ _    (IPC)    _ _ _ _ _ _ 
    sniff()        |           |  packets  |           |  
   thread 1  --->  |   parent  |  ------>  |   child   |  sendp()
@@ -25,25 +29,33 @@ from widget import widget_gui
 Ether, IP, TCP, UDP, ICMP, ARP = scapy.Ether, scapy.IP, scapy.TCP, scapy.UDP, scapy.ICMP, scapy.ARP
 IP_FLAG_MF = 1     # [IP] Flag : More Fragments (0 0 1)
 
-def get_src_mac(dst_ip):
-    # 대상 IP로 가는 경로의 인터페이스를 가져옴
-    interface = scapy.conf.route.route(dst_ip)[0]
+# def get_src_mac(dst_ip):
+#     #대상 IP로 가는 경로의 인터페이스를 가져옴
+#     interface = scapy.conf.route.route(dst_ip)[0]
+#     return scapy.get_if_hwaddr(interface)
+
+def get_src_mac(interface):
     return scapy.get_if_hwaddr(interface)
 
-def get_dst_mac(ip):
+def get_dst_mac(interface, dst_ip):
     try:
-        ans, _ = scapy.arping(ip, timeout=2, verbose=False)
+        ans, _ = scapy.arping(iface=interface, net=dst_ip, timeout=1, verbose=False, )
         for sent, received in ans:
             return received.hwsrc
-        print(f"Could not find MAC Address for {ip}")
+        print(f"Could not find MAC Address for {dst_ip}")
         return None
     except Exception as e:
-        print(f"Can't send ARP for {ip}. Exception : {e}")
+        print(f"Can't send ARP for {dst_ip}. Exception : {e}")
         return None
 
 # Child Process
-def packet_multiprocessor(q_pkt_from_parent, stop_event, infos):
+def packet_delay_send(q_pkt_from_parent, stop_event, infos):
     scapy.conf.verb = 0
+
+    # Process Priority Elevation
+    sub_pid = psutil.Process(os.getpid())
+    sub_pid.nice(psutil.HIGH_PRIORITY_CLASS)
+
     # Information from Main Thread
     delay_ms, selected_interface, pkt_sent_num = infos
 
@@ -85,16 +97,16 @@ class SniffingApp:
         # Multiprocessing for Delayed Sending
         self.process = None
         self.stop_event = multiprocessing.Event()           # Flag for Stopping Child Process
-        self.q_packet_to_child = multiprocessing.Queue()    # Queue for Delivering Packet to Child Process
+        self.q_pkt_to_child = multiprocessing.Queue()    # Queue for Delivering Packet to Child Process
 
         # Selected Mode
         self.mode_selected = "Routing"
 
         # Selected Interface Name 1 & 2
-        self.selected_interface = ["", ""]
+        self.selected_if = ["", ""]
 
         # IP/MAC Setting
-        self.ip1, self.src_mac1, self.dst_mac1  = '', '', ''
+        self.ip1, self.src_mac1, self.dst_mac1 = '', '', ''
         self.ip2, self.src_mac2, self.dst_mac2 = '', '', ''
 
         # Delay Time Input
@@ -108,6 +120,9 @@ class SniffingApp:
         self.pkt_detect_var.set(str(self.pkt_detect_num))
         self.pkt_process_var.set(str(self.pkt_process_num))
         self.pkt_sent_var.set(str(self.pkt_sent_num.value))
+
+        # GUI Sent Number Periodic Update
+        self.update_id = 0
 
         # Duplicate Packet Filter
         self.pkt_id_que = deque([], maxlen=2000)
@@ -123,7 +138,7 @@ class SniffingApp:
         widget_gui.create_widgets(self)
 
         print("ⓒ 2025,LIG Nex1-YoungSuh Lee,All rights reserved.")
-        print("Last Revision : 2025.02.21 Distribution Version 1.4")
+        print(f"Last Revision : {LAST_UPDATE} Distribution {VERSION}")
         print("\nInit Complete & GUI created!")
 
     def start_sniffing(self):
@@ -140,12 +155,14 @@ class SniffingApp:
             self.ip2 = self.ip2_entry.get().replace(" ","")
             print(f'\n[{self.ip1}] <-> [Me] <-> [{self.ip2}]\nFinding MAC Address... ')
 
-            # Find MAC Address by processing ARP
-            self.src_mac1, self.src_mac2 = get_src_mac(self.ip1), get_src_mac(self.ip2)
-            self.dst_mac1, self.dst_mac2 = get_dst_mac(self.ip1), get_dst_mac(self.ip2)
+            # Find MAC Address by ARP
+            self.src_mac1, self.dst_mac1 = get_src_mac(self.selected_if[0]), get_dst_mac(self.selected_if[0], self.ip1)
+            self.src_mac2, self.dst_mac2 = get_src_mac(self.selected_if[1]), get_dst_mac(self.selected_if[1], self.ip2)
+
             print(f'[Interface 1] (this) src_mac1 : {self.src_mac1}, (ip1) dst_mac1 : {self.dst_mac1}\n'
                   f'[Interface 2] (this) src_mac2 : {self.src_mac2}, (ip2) dst_mac2 : {self.dst_mac2}\n')
-            if (self.dst_mac2 is None) or (self.dst_mac2 is None):
+            # MAC Address Validation
+            if (self.dst_mac1 is None) or (self.dst_mac2 is None):
                 messagebox.showerror("Invalid Connection", "Please check the Network Status.")
                 print("MAC Address Not Found !!\n")
                 return
@@ -154,17 +171,17 @@ class SniffingApp:
             if self.process is None or not self.process.is_alive():
                 # Initialize
                 self.stop_event.clear()
-                self.q_packet_to_child = multiprocessing.Queue()
+                self.q_pkt_to_child = multiprocessing.Queue()
 
-                gui_infos = (self.delay_time, self.selected_interface, self.pkt_sent_num)
-                self.process = multiprocessing.Process(target=packet_multiprocessor,
-                                          args=(self.q_packet_to_child, self.stop_event, gui_infos), daemon=True)
+                gui_infos = (self.delay_time, self.selected_if, self.pkt_sent_num)
+                self.process = multiprocessing.Process(target=packet_delay_send,
+                                          args=(self.q_pkt_to_child, self.stop_event, gui_infos), daemon=True)
                 self.process.start()
 
             # Sniffing Thread
             self.is_sniffing = True
-            self.sniff_thread1 = threading.Thread(target=self.sniff_packets, daemon=True, args=(self.selected_interface[0],))
-            self.sniff_thread2 = threading.Thread(target=self.sniff_packets, daemon=True, args=(self.selected_interface[1],))
+            self.sniff_thread1 = threading.Thread(target=self.sniff_packets, daemon=True, args=(self.selected_if[0],))
+            self.sniff_thread2 = threading.Thread(target=self.sniff_packets, daemon=True, args=(self.selected_if[1],))
             self.sniff_thread1.start()
             self.sniff_thread2.start()
 
@@ -177,6 +194,7 @@ class SniffingApp:
             print(f"{self.mode_selected} Started!")
 
     def stop_sniffing(self):
+        # Stop Sniff Thread
         self.is_sniffing = False
 
         if self.process and self.process.is_alive():
@@ -185,7 +203,8 @@ class SniffingApp:
             self.process.terminate()
 
         # [Sent Number Entry] Stop Update
-        self.root.after_cancel(self.update_id)
+        if self.update_id:
+            self.root.after_cancel(self.update_id)
 
         # [Button, Entry] Enable/Disable
         widget_gui.stop_button_pressed(self)
@@ -274,7 +293,7 @@ class SniffingApp:
             return
 
         # Sending Packets to Child Process
-        self.q_packet_to_child.put((packet, parse_start_time))
+        self.q_pkt_to_child.put((packet, parse_start_time))
 
         # Packet Monitoring Update
         self.pkt_detect_num += 1
@@ -291,7 +310,8 @@ def app_closing():
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     root = tk.Tk()
-    root.title("Packet Sniffer")
+    # Window Title
+    root.title(f"Delayed Packet Router {VERSION}")
     root.protocol("WM_DELETE_WINDOW", app_closing)
 
     app = SniffingApp(root)
@@ -300,6 +320,10 @@ if __name__ == "__main__":
         messagebox.showerror("Error", "\"Npcap\" is not installed."
                                       "\nPlease install \"Npcap\" with 'Winpcap API-compatible mode'")
         exit(1)
+
+    # Process Priority Elevation
+    main_pid = psutil.Process(os.getpid())
+    main_pid.nice(psutil.HIGH_PRIORITY_CLASS)
 
     # Run the GUI application
     root.mainloop()

@@ -20,8 +20,6 @@ class LabeledEntry():
         self.entry.grid(row=0, column=1, padx=10, pady=10)
 
 def create_widgets(self):
-    # Window Title
-    self.root.title("Delayed Packet Router")
     # Window Size
     self.root.geometry("610x260")
     self.root.resizable(False, False)
@@ -41,14 +39,14 @@ def create_widgets(self):
     self.interface_label = tk.Label(frame1, text="Network Interface 1")
     self.interface_label.grid(row=1, column=0, padx=10, pady=5)
 
-    self.interface_combobox1 = ttk.Combobox(frame1, textvariable=self.selected_interface[0], width=60, state="readonly")
+    self.interface_combobox1 = ttk.Combobox(frame1, textvariable=self.selected_if[0], width=60, state="readonly")
     self.interface_combobox1.grid(row=1, column=1, padx=10, pady=5)
 
     # Network Interface 2
     self.interface_label2 = tk.Label(frame1, text="Network Interface 2")
     self.interface_label2.grid(row=2, column=0, padx=10, pady=7)
 
-    self.interface_combobox2 = ttk.Combobox(frame1, textvariable=self.selected_interface[1], width=60, state="readonly")
+    self.interface_combobox2 = ttk.Combobox(frame1, textvariable=self.selected_if[1], width=60, state="readonly")
     self.interface_combobox2.grid(row=2, column=1, padx=10, pady=7)
 
     # Function Binding
@@ -131,7 +129,7 @@ def invalid_ip(ip_str):
 def check_input_validation(self):
     try:
         # Check Validation - Interface Selecting Box
-        if "" in self.selected_interface:
+        if "" in self.selected_if:
             raise ValueError("InterfaceError")
         # Check Validation - IP Address Format
         if invalid_ip(self.ip1_entry.get()) or invalid_ip(self.ip2_entry.get()):
@@ -181,24 +179,7 @@ def stop_button_pressed(self):
     # Toggle Button Enable
     self.toggle.enable()
 
-# ComboBox Opened
-def update_interfaces2(self, self_combox, event=None):
-    # Update Network Interface
-    self.interfaces = []
-    for iface in scapy.conf.ifaces:
-        iface_name = iface
-        print(iface_name)
-        try:
-            iface_ip = scapy.conf.ifaces[iface].ip
-            iface_ds = scapy.conf.ifaces[iface].description
-            if iface_ip.replace(" ","") == "": continue
-        except AttributeError: continue
-        self.interfaces.append([[iface_ip, iface_ds],iface_name])
-    # Update ComboBox List
-    self_combox['values'] = list(zip(*self.interfaces))[0]
-
-
-# ComboBox Opened
+# ComboBox List Expanded
 def update_interfaces(self, self_combox, event=None):
     # Update Network Interface
     self.interfaces = []
@@ -216,7 +197,7 @@ def update_interfaces(self, self_combox, event=None):
     # Update ComboBox List
     self_combox['values'] = list(zip(*self.interfaces))[0]
 
-# ComboBox Selected
+# ComboBox Item Selected
 def select_interface(self, num, event):
     if num == 1: self_if_combobox = self.interface_combobox1
     else:        self_if_combobox = self.interface_combobox2
@@ -224,7 +205,7 @@ def select_interface(self, num, event):
     selected_idx = self_if_combobox.current()
     self_if_combobox.set(self_if_combobox['values'][selected_idx])
     self_if_selected = self.interfaces[selected_idx][1]
-    self.selected_interface[num-1] = self_if_selected
+    self.selected_if[num - 1] = self_if_selected
 
     print(f"Interface {num} Selected :", self.interfaces[selected_idx][0])
 
