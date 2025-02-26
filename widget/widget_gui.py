@@ -36,25 +36,25 @@ def create_widgets(self):
     self.toggle.grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
     # Network Interface 1
-    self.interface_label = tk.Label(frame1, text="Network Interface 1")
-    self.interface_label.grid(row=1, column=0, padx=10, pady=5)
+    self.iface_label = tk.Label(frame1, text="Network Interface 1")
+    self.iface_label.grid(row=1, column=0, padx=10, pady=5)
 
-    self.interface_combobox1 = ttk.Combobox(frame1, textvariable=self.selected_if[0], width=60, state="readonly")
-    self.interface_combobox1.grid(row=1, column=1, padx=10, pady=5)
+    self.iface_combobox1 = ttk.Combobox(frame1, textvariable=self.iface_selected[0], width=60, state="readonly")
+    self.iface_combobox1.grid(row=1, column=1, padx=10, pady=5)
 
     # Network Interface 2
-    self.interface_label2 = tk.Label(frame1, text="Network Interface 2")
-    self.interface_label2.grid(row=2, column=0, padx=10, pady=7)
+    self.iface_label2 = tk.Label(frame1, text="Network Interface 2")
+    self.iface_label2.grid(row=2, column=0, padx=10, pady=7)
 
-    self.interface_combobox2 = ttk.Combobox(frame1, textvariable=self.selected_if[1], width=60, state="readonly")
-    self.interface_combobox2.grid(row=2, column=1, padx=10, pady=7)
+    self.iface_combobox2 = ttk.Combobox(frame1, textvariable=self.iface_selected[1], width=60, state="readonly")
+    self.iface_combobox2.grid(row=2, column=1, padx=10, pady=7)
 
     # Function Binding
-    self.interface_combobox1.bind("<Button-1>", lambda event: update_interfaces(self, self.interface_combobox1))
-    self.interface_combobox1.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 1, event))
+    self.iface_combobox1.bind("<Button-1>", lambda event: update_interfaces(self, self.iface_combobox1))
+    self.iface_combobox1.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 1, event))
 
-    self.interface_combobox2.bind("<Button-1>", lambda event: update_interfaces(self, self.interface_combobox2))
-    self.interface_combobox2.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 2, event))
+    self.iface_combobox2.bind("<Button-1>", lambda event: update_interfaces(self, self.iface_combobox2))
+    self.iface_combobox2.bind("<<ComboboxSelected>>", lambda event: select_interface(self, 2, event))
 
     # ------------------------------------ Frame 2 ------------------------------------- #
     frame2 = Frame(self.root)
@@ -129,7 +129,7 @@ def invalid_ip(ip_str):
 def check_input_validation(self):
     try:
         # Check Validation - Interface Selecting Box
-        if "" in self.selected_if:
+        if "" in self.iface_selected:
             raise ValueError("InterfaceError")
         # Check Validation - IP Address Format
         if invalid_ip(self.ip1_entry.get()) or invalid_ip(self.ip2_entry.get()):
@@ -157,8 +157,8 @@ def start_button_pressed(self):
     self.delay_entry.config(state=tk.DISABLED)
     self.start_button.config(state=tk.DISABLED)
     self.stop_button.config(state=tk.NORMAL)
-    self.interface_combobox1.config(state=tk.DISABLED)
-    self.interface_combobox2.config(state=tk.DISABLED)
+    self.iface_combobox1.config(state=tk.DISABLED)
+    self.iface_combobox2.config(state=tk.DISABLED)
     # Packet Counter Reset
     self.pkt_detect_num, self.pkt_process_num, self.pkt_sent_num.value = 0, 0, 0
     self.pkt_detect_var.set(str(self.pkt_detect_num))
@@ -174,43 +174,42 @@ def stop_button_pressed(self):
     self.delay_entry.config(state=tk.NORMAL)
     self.start_button.config(state=tk.NORMAL)
     self.stop_button.config(state=tk.DISABLED)
-    self.interface_combobox1.config(state="readonly")
-    self.interface_combobox2.config(state="readonly")
+    self.iface_combobox1.config(state="readonly")
+    self.iface_combobox2.config(state="readonly")
     # Toggle Button Enable
     self.toggle.enable()
 
 # ComboBox List Expanded
 def update_interfaces(self, self_combox, event=None):
     # Update Network Interface
-    self.interfaces = []
+    self.iface_list = []
     for iface in get_windows_if_list():
         if len(iface['ips']) == 0:              continue
         if "loopback" in iface['name'].lower(): continue
-
         iface_name        = f"{iface['name']}"
         iface_description = f"{iface['name']} {iface['description']}"
         for ip in iface['ips']:
-            if(all(map(lambda x: x.isdecimal(), ip.split('.')))):
+            if all(map(lambda x: x.isdecimal(), ip.split('.'))):
                 iface_ip = ip
-                self.interfaces.append([[iface_ip, iface_description], iface_name])
+                self.iface_list.append([[iface_ip, iface_description], iface_name])
 
     # Update ComboBox List
-    self_combox['values'] = list(zip(*self.interfaces))[0]
+    self_combox['values'] = list(zip(*self.iface_list))[0]
 
 # ComboBox Item Selected
-def select_interface(self, num, event):
-    if num == 1: self_if_combobox = self.interface_combobox1
-    else:        self_if_combobox = self.interface_combobox2
+def select_interface(self, if_num, event):
+    if if_num == 1: self_iface_combobox = self.iface_combobox1
+    else:           self_iface_combobox = self.iface_combobox2
 
-    selected_idx = self_if_combobox.current()
-    self_if_combobox.set(self_if_combobox['values'][selected_idx])
-    self_if_selected = self.interfaces[selected_idx][1]
-    self.selected_if[num - 1] = self_if_selected
+    selected_idx = self_iface_combobox.current()
+    self_iface_combobox.set(self_iface_combobox['values'][selected_idx])
+    self_iface_selected = self.iface_list[selected_idx][1]
+    self.iface_selected[if_num - 1] = self_iface_selected
 
-    print(f"Interface {num} Selected :", self.interfaces[selected_idx][0])
+    print(f"Interface {if_num} Selected :", self.iface_list[selected_idx][0])
 
 # Sent Packet Number Update
-def pkt_sent_update(self):
+def pkt_sent_entry_update(self):
     if self.stop_event.is_set(): return
 
     # Get Sent Number from 'self.pkt_sent_num' (Shared Memory)
@@ -219,4 +218,4 @@ def pkt_sent_update(self):
         self.pkt_sent_var.set(self.pkt_sent_num.value)
 
     # Update Packet Monitoring
-    return self.root.after(100, pkt_sent_update, self)  # Update Every 100 ms
+    return self.root.after(100, pkt_sent_entry_update, self)  # Update Every 100 ms
