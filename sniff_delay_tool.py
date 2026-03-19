@@ -123,7 +123,7 @@ class MainProcess:
         return True
 
     # Stop Button Pressed
-    def stop_sniffing(self):
+    def stop_sniffing(self) -> None:
         # Stop Sniff Thread
         self.is_sniffing = False
         self.stop_event.set()
@@ -133,12 +133,12 @@ class MainProcess:
         print(f"Delayed {self.mode_selected} Stopped! ({datetime.now()})\n")
 
     # Helps sniff threads to stop right away
-    def send_dummy_packets(self):
+    def send_dummy_packets(self) -> None:
         send_dummy_packet(self.widget.iface_selected[0])
         send_dummy_packet(self.widget.iface_selected[1])
 
     # Function called from Sniff threads
-    def sniff_packets(self, interface=None) -> None:
+    def sniff_packets(self, interface: str=None) -> None:
         # Routing
         if self.mode_selected == "Routing":
             bpf_filter = "tcp or udp or icmp"
@@ -174,7 +174,7 @@ class MainProcess:
         return False
 
     # Function called from sniff_packets function
-    def packet_callback(self, packet: Packet):
+    def packet_callback(self, packet: Packet) -> None:
         # Record start time of parsing
         parse_start_time = time.time()
 
@@ -232,8 +232,6 @@ class MainProcess:
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-
-
 
     if not scapy.conf.use_pcap:
         messagebox.showerror("Error", "\"Npcap\" is not installed."

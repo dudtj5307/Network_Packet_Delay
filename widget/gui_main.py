@@ -7,7 +7,7 @@ from scapy.arch import get_windows_if_list
 import tkinter as tk
 from tkinter import ttk, Frame, messagebox
 
-from sniff_delay_tool import VERSION
+from sniff_delay_tool import VERSION, MainProcess
 from widget.gui_switch import ToggleSwitch
 from utils.network import *
 
@@ -15,7 +15,7 @@ DEFAULT_IP_ADDRESS_1 = '192.168.45.1'
 DEFAULT_IP_ADDRESS_2 = '192.168.45.1'
 
 class MainWidget:
-    def __init__(self, parent):
+    def __init__(self, parent: MainProcess):
         self.parent = parent
 
         self.root = tk.Tk()
@@ -33,7 +33,7 @@ class MainWidget:
         self.pkt_sent_var    = tk.StringVar(value="0")
 
         # GUI Sent Number Periodic Update
-        self.update_id = 0
+        self.update_id = ""
 
         # Flag for printing packets
         self.print_flag = tk.BooleanVar()
@@ -44,7 +44,7 @@ class MainWidget:
         # Called when closing 'SniffingApp'
         self.root.protocol("WM_DELETE_WINDOW", self.app_closing)
 
-    def gui_setup(self):
+    def gui_setup(self) -> None:
         self.root.title(f"Delayed Packet Router {VERSION}")
         self.root.geometry("610x260")
         self.root.resizable(False, False)
@@ -185,7 +185,7 @@ class MainWidget:
             self.root.after_cancel(self.update_id)
 
     # Input Validation
-    def input_validation(self):
+    def input_validation(self) -> bool:
         try:
             # Check Validation - Interface Selecting Box
             if "" in self.iface_selected:
@@ -208,7 +208,7 @@ class MainWidget:
         return False
 
     # ComboBox List Expanded
-    def update_interfaces(self, index):
+    def update_interfaces(self, iface_num: int) -> None:
         # Update Network Interface
         self.iface_list = []
         for interface in get_windows_if_list():
@@ -218,19 +218,19 @@ class MainWidget:
                     self.iface_list.append(iface)
 
         # Update ComboBox List
-        self.iface_combobox[index]['values'] = [iface.display for iface in self.iface_list]
+        self.iface_combobox[iface_num]['values'] = [iface.display for iface in self.iface_list]
 
     # ComboBox Item Selected
-    def select_interface(self, if_num, event):
-        idx_selected = self.iface_combobox[if_num].current()
+    def select_interface(self, iface_num: int, event) -> None:
+        idx_selected = self.iface_combobox[iface_num].current()
 
         iface = self.iface_list[idx_selected]
-        self.iface_combobox[if_num].set(iface.display)
-        self.iface_selected[if_num] = iface.name
-        print(f"Interface {if_num + 1} Selected :", iface.display)
+        self.iface_combobox[iface_num].set(iface.display)
+        self.iface_selected[iface_num] = iface.name
+        print(f"Interface {iface_num + 1} Selected :", iface.display)
 
     # Sent Packet Number Update
-    def pkt_counts_update(self):
+    def pkt_counts_update(self) -> str | None:
         if self.parent.stop_event.is_set():
             return
         # Get Sent Number from 'self.pkt_sent_num' (Shared Memory)
@@ -241,8 +241,9 @@ class MainWidget:
         # Update Packet Monitoring
         return self.root.after(100, self.pkt_counts_update)  # Update Every 100 ms
 
-    def app_closing(self):
-        self.parent.stop_sniffing()
+    def app_closing(self) -> None:
+        if self.parent.is_sniffing:
+            self.parent.stop_sniffing()
         self.root.destroy()
 
 

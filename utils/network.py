@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import psutil
 import time
@@ -18,11 +20,11 @@ class Interface:
     description : str
 
     @property
-    def display(self):
+    def display(self) -> str:
         return f"[{self.name}] {self.description} ({self.ip})"
 
     @classmethod
-    def check_valid(cls, ip, name, description):
+    def check_valid(cls, ip, name, description) -> Interface | None:
         try:    # IPv4 valid check
             if ipaddress.ip_address(ip).version != 4:   return None
         except ValueError:  return None
@@ -31,10 +33,10 @@ class Interface:
             return None
         return cls(ip, name, description)
 
-def get_src_mac(interface):
+def get_src_mac(interface: str) -> str:
     return scapy.get_if_hwaddr(interface)
 
-def get_dst_mac(interface, dst_ip):
+def get_dst_mac(interface: str, dst_ip: str) -> str | None:
     try:
         ans, _ = scapy.arping(iface=interface, net=dst_ip, timeout=1, verbose=False)
         for sent, received in ans:
@@ -45,7 +47,7 @@ def get_dst_mac(interface, dst_ip):
         print(f"Can't send ARP for {dst_ip}. Exception : {e}")
         return None
 
-def invalid_ip(ip_str):
+def invalid_ip(ip_str: str) -> bool:
     ips = ip_str.strip().split('.')
     if len(ips) != 4: return True
     for ip in ips:
@@ -54,7 +56,7 @@ def invalid_ip(ip_str):
     return False
 
 # Child Process
-def packet_delay_send(infos):
+def packet_delay_send(infos) -> None:
     # Process Priority Elevation
     sub_pid = psutil.Process(os.getpid())
     sub_pid.nice(psutil.HIGH_PRIORITY_CLASS)
@@ -87,5 +89,5 @@ def packet_delay_send(infos):
             else:
                 break
 
-def send_dummy_packet(iface):
+def send_dummy_packet(iface: str) -> None:
     scapy.sendp(Ether(dst="ff:ff:ff:ff:ff:ff") / IP(dst="255.255.255.255") / UDP(dport=9999), iface=iface)
