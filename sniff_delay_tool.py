@@ -1,6 +1,7 @@
 import os
 import psutil
 import time
+from datetime import datetime
 from sys import exit
 from collections import deque, defaultdict
 import hashlib
@@ -8,12 +9,14 @@ import threading
 import multiprocessing
 
 import scapy.all as scapy
+from scapy.packet import Packet
+
 scapy.conf.verb = 0
 
 import tkinter as tk
 from tkinter import messagebox
 
-from widget.main_gui import *
+from widget.gui_main import *
 
 from utils.network import *
 
@@ -31,19 +34,18 @@ LAST_UPDATE, VERSION = "2026.03.15", "v1.5"
 
 class MainProcess:
     def __init__(self):
-
         # GUI Elements
         self.widget = MainWidget(self)
 
-        # Multiprocessing for Delayed Sending
-        self.child_process = None
-        self.stop_event = multiprocessing.Event()       # Flag for Stopping Child Process
-        self.que_to_child = multiprocessing.Queue()     # Queue for Delivering Packet to Child Process
-
-        # Scapy Sniff Threads
+        # MainProcess - Sniff Threads
         self.sniff_thread1 = None
         self.sniff_thread2 = None
         self.is_sniffing = False
+
+        # ChildProcess for Delayed Sending
+        self.child_process = None
+        self.stop_event = multiprocessing.Event()       # Flag for Stopping Child Process
+        self.que_to_child = multiprocessing.Queue()     # Queue for Delivering Packet to Child Process
 
         # Selected Mode
         self.mode_selected = "Routing"
@@ -60,27 +62,20 @@ class MainProcess:
         self.pkt_process_num = 0
         self.pkt_sent_num    = multiprocessing.Value('i',0)
 
-        # GUI Sent Number Periodic Update
-        self.update_id = 0
-
         # Duplicate Packet Filter
-        self.pkt_id_que = deque([], maxlen=2000)
         self.arp_cache = defaultdict(float)
-        self.arp_ttl = 10   # ARP Time-to-Live
+        self.APR_CACHE_TTL = 10   # ARP Cache Time-to-Live
+
+        self.pkt_cache = deque([], maxlen=2000)
 
         print("ⓒ 2026,LIG Nex1, YoungSuh Lee, All rights reserved.")
         print(f"Last Revision : {VERSION} Distributed on {LAST_UPDATE} ")
         print("\nInit Complete & GUI created!")
 
     # Start Button Pressed
-    def start_sniffing(self):
+    def start_sniffing(self) -> bool:
         if self.is_sniffing:
-            return
-
-        # Input Validation
-        error = input_validation(self.widget)
-        if error:
-            return
+            return False
 
         self.mode_selected = self.widget.toggle.get_current_mode()
 
@@ -91,7 +86,6 @@ class MainProcess:
 
         # Find MAC Address by ARP
         iface_selected = self.widget.iface_selected
-        print(iface_selected)
         self.src_mac1, self.dst_mac1 = get_src_mac(iface_selected[0]), get_dst_mac(iface_selected[0], self.ip1)
         self.src_mac2, self.dst_mac2 = get_src_mac(iface_selected[1]), get_dst_mac(iface_selected[1], self.ip2)
         print(f'[Interface 1] (this) src_mac1 : {self.src_mac1}, (ip1) dst_mac1 : {self.dst_mac1}\n'
@@ -101,9 +95,12 @@ class MainProcess:
         if (self.dst_mac1 is None) or (self.dst_mac2 is None):
             messagebox.showerror("Invalid Connection", "Please check the Network Status.")
             print("MAC Address Not Found !!\n")
-            return
+            return False
 
         self.delay_time = float(self.widget.delay_entry.get())
+
+        # Packet Monitoring
+        self.pkt_detect_num, self.pkt_process_num, self.pkt_sent_num = 0, 0, multiprocessing.Value('i',0)
 
         # Packet Multiprocessor Run
         if self.child_process is None or not self.child_process.is_alive():
@@ -111,9 +108,8 @@ class MainProcess:
             self.stop_event.clear()
             self.que_to_child = multiprocessing.Queue()
 
-            gui_infos = (self.delay_time, iface_selected, self.pkt_sent_num)
-            self.child_process = multiprocessing.Process(target=packet_delay_send, daemon=True,
-                                                         args=(self.que_to_child, self.stop_event, gui_infos))
+            gui_infos = (self.que_to_child, self.stop_event, self.delay_time, iface_selected, self.pkt_sent_num)
+            self.child_process = multiprocessing.Process(target=packet_delay_send, daemon=True, args=(gui_infos,))
             self.child_process.start()
 
         # Sniffing Thread
@@ -122,42 +118,31 @@ class MainProcess:
         self.sniff_thread2 = threading.Thread(target=self.sniff_packets, daemon=True, args=(iface_selected[1],))
         self.sniff_thread1.start()
         self.sniff_thread2.start()
+        print(f"Delayed {self.mode_selected} Started! ({datetime.now()})")
 
-        # [Sent Number Entry] Periodic Update
-        self.update_id = self.widget.pkt_sent_entry_update()
-
-        # [Button, Entry] Enable/Disable
-        self.widget.start_button_pressed()
-
-        print(f"{self.mode_selected} Started!")
+        return True
 
     # Stop Button Pressed
     def stop_sniffing(self):
         # Stop Sniff Thread
         self.is_sniffing = False
+        self.stop_event.set()
+        self.send_dummy_packets()
+        self.sniff_thread1.join()
+        self.sniff_thread2.join()
+        print(f"Delayed {self.mode_selected} Stopped! ({datetime.now()})\n")
 
-        # Stop Child Process
-        if self.child_process and self.child_process.is_alive():
-            self.stop_event.set()
-            time.sleep(0.2)
-            self.child_process.terminate()
-
-        # Stop Updating <Sent Number Entry>
-        if self.update_id:
-            self.widget.root.after_cancel(self.update_id)
-
-        # [Button, Entry] Enable/Disable
-        self.widget.stop_button_pressed()
-
-        print("Sniffing & Delaying Stopped!\n")
+    # Helps sniff threads to stop right away
+    def send_dummy_packets(self):
+        send_dummy_packet(self.widget.iface_selected[0])
+        send_dummy_packet(self.widget.iface_selected[1])
 
     # Function called from Sniff threads
-    def sniff_packets(self, interface=None):
+    def sniff_packets(self, interface=None) -> None:
         # Routing
         if self.mode_selected == "Routing":
             bpf_filter = "tcp or udp or icmp"
             promisc_mode = False
-
         # Bridging
         else:
             bpf_filter = "tcp or udp or icmp or arp"
@@ -168,38 +153,44 @@ class MainProcess:
                     filter=bpf_filter, stop_filter=lambda p: not self.is_sniffing)
 
     # Check if same ARP has been sent recently
-    def arp_recently_sent(self, packet):
+    def arp_cached(self, packet: Packet) -> bool:
         # Packet Hash Value Save
         arp_id = f"{packet.op}{packet.hwsrc}{packet.psrc}{packet.hwdst}{packet.pdst}"
         arp_hash = hashlib.md5(arp_id.encode()).hexdigest()
 
-        # ARP Cache TTL Check
+        # ARP Cache Check TTL
         now = time.time()
-        if now - self.arp_cache[arp_hash] > self.arp_ttl:
+        if now - self.arp_cache[arp_hash] > self.APR_CACHE_TTL:
             self.arp_cache[arp_hash] = now
             return False
         else:
             return True
 
+    def pkt_cached(self, packet: Packet, pkt_chksum) -> bool:
+        # Not to resend duplicate packet
+        if (packet[IP].chksum, pkt_chksum) in self.pkt_cache:
+            return True
+        self.pkt_cache.append((packet[IP].chksum, pkt_chksum))
+        return False
+
     # Function called from sniff_packets function
-    def packet_callback(self, packet):
+    def packet_callback(self, packet: Packet):
+        # Record start time of parsing
+        parse_start_time = time.time()
+
         # Ethernet Packet Process
         if not packet.haslayer(Ether):
             return
 
         # L2 Packets (ARP)
         if packet.haslayer(ARP) and self.mode_selected == "Bridging":
-            # Record start time of parsing
-            parse_start_time = time.time()
-
             # Check if this arp is recently sent
-            if self.arp_recently_sent(packet):
+            if self.arp_cached(packet):
                 return
-            pkt_protocol = "ARP"
 
             if self.widget.print_flag.get():
-                print(f"[Detected] {pkt_protocol} {packet.psrc} -> {packet.pdst} "
-                      f"{'Request' if packet.op==1 else 'Reply'}  ", flush=True)
+                print(f"[Detected] ARP {'Request' if packet.op==1 else 'Reply'} {packet.psrc} -> {packet.pdst} ",
+                      flush=True)
 
         # L3 Packets (TCP, UDP, UDP-segments, ICMP)
         elif packet.haslayer(IP):
@@ -209,29 +200,23 @@ class MainProcess:
             elif packet.haslayer(ICMP): pkt_chksum = packet[ICMP].chksum; pkt_protocol = "ICMP"
             else:
                 return
-            # Record start time of parsing
-            parse_start_time = time.time()
 
-            # Not to resend duplicate packet
-            if (packet[IP].chksum, pkt_chksum) in self.pkt_id_que:
-                return
-            self.pkt_id_que.append((packet[IP].chksum, pkt_chksum))
-
-            # Packet IP filtering
-            pkt_ip1, pkt_ip2 = packet[IP].src, packet[IP].dst
-            if (pkt_ip1, pkt_ip2) not in [(self.ip1, self.ip2), (self.ip2, self.ip1)]:
+            if self.pkt_cached(packet, pkt_chksum):
                 return
 
-            # Route MAC Address
-            if packet[IP].dst == self.ip1:
-                packet[Ether].src = self.src_mac1
-                packet[Ether].dst = self.dst_mac1
-            elif packet[IP].dst == self.ip2:
+            # Route MAC Address & IP Filtering
+            pkt_ip_src, pkt_ip_dst = packet[IP].src, packet[IP].dst
+            if pkt_ip_src == self.ip1 and pkt_ip_dst == self.ip2:
                 packet[Ether].src = self.src_mac2
                 packet[Ether].dst = self.dst_mac2
+            elif pkt_ip_src == self.ip2 and pkt_ip_dst == self.ip1:
+                packet[Ether].src = self.src_mac1
+                packet[Ether].dst = self.dst_mac1
+            else:
+                return
 
             if self.widget.print_flag.get():
-                print(f"[Detected] {pkt_protocol} {pkt_ip1} -> {pkt_ip2} ")
+                print(f"[Detected] {pkt_protocol} {pkt_ip_src} -> {pkt_ip_dst} ")
         else:
             return
 
@@ -242,7 +227,7 @@ class MainProcess:
         self.pkt_detect_num += 1
         self.pkt_process_num += 1
         self.widget.pkt_detect_var.set(str(self.pkt_detect_num))
-        self.widget.pkt_process_var.set(str(self.pkt_detect_num))
+        self.widget.pkt_process_var.set(str(self.pkt_process_num))
 
 
 if __name__ == "__main__":

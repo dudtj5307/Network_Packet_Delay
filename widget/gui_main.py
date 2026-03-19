@@ -1,6 +1,5 @@
 import os, sys
-from dataclasses import dataclass
-import ipaddress
+import multiprocessing
 
 import scapy.all as scapy
 from scapy.arch import get_windows_if_list
@@ -8,15 +7,14 @@ from scapy.arch import get_windows_if_list
 import tkinter as tk
 from tkinter import ttk, Frame, messagebox
 
-from widget.toggleSwitch import ToggleSwitch
+from sniff_delay_tool import VERSION
+from widget.gui_switch import ToggleSwitch
+from utils.network import *
 
 DEFAULT_IP_ADDRESS_1 = '192.168.45.1'
 DEFAULT_IP_ADDRESS_2 = '192.168.45.1'
 
-from sniff_delay_tool import VERSION
-
 class MainWidget:
-
     def __init__(self, parent):
         self.parent = parent
 
@@ -30,28 +28,21 @@ class MainWidget:
         self.iface_combobox = [None, None]
 
         # Packet Monitoring
-        self.pkt_detect_var  = tk.StringVar()
-        self.pkt_process_var = tk.StringVar()
-        self.pkt_sent_var    = tk.StringVar()
+        self.pkt_detect_var  = tk.StringVar(value="0")
+        self.pkt_process_var = tk.StringVar(value="0")
+        self.pkt_sent_var    = tk.StringVar(value="0")
 
-        self.pkt_detect_var.set("0")
-        self.pkt_process_var.set("0")
-        self.pkt_sent_var.set("0")
+        # GUI Sent Number Periodic Update
+        self.update_id = 0
 
         # Flag for printing packets
         self.print_flag = tk.BooleanVar()
         self.print_flag.set(False)
 
-        # GUI Sent Number Periodic Update
-        self.update_id = 0
-
         self.gui_setup()
 
         # Called when closing 'SniffingApp'
-        def app_closing():
-            self.parent.stop_sniffing()
-            self.root.destroy()
-        self.root.protocol("WM_DELETE_WINDOW", app_closing)
+        self.root.protocol("WM_DELETE_WINDOW", self.app_closing)
 
     def gui_setup(self):
         self.root.title(f"Delayed Packet Router {VERSION}")
@@ -74,14 +65,14 @@ class MainWidget:
         self.iface_label = tk.Label(frame1, text="Network Interface 1")
         self.iface_label.grid(row=1, column=0, padx=10, pady=5)
 
-        self.iface_combobox[0] = ttk.Combobox(frame1, textvariable=self.iface_selected[0], width=60, state="readonly")
+        self.iface_combobox[0] = ttk.Combobox(frame1, width=60, state="readonly")
         self.iface_combobox[0].grid(row=1, column=1, padx=10, pady=5)
 
         # Network Interface 2
         self.iface_label2 = tk.Label(frame1, text="Network Interface 2")
         self.iface_label2.grid(row=2, column=0, padx=10, pady=7)
 
-        self.iface_combobox[1] = ttk.Combobox(frame1, textvariable=self.iface_selected[1], width=60, state="readonly")
+        self.iface_combobox[1] = ttk.Combobox(frame1, width=60, state="readonly")
         self.iface_combobox[1].grid(row=2, column=1, padx=10, pady=7)
 
         # Function Binding
@@ -120,11 +111,11 @@ class MainWidget:
         self.delay_entry.insert(0, "300")
 
         # Start Button
-        self.start_button = tk.Button(frame2, text="Start", command=self.parent.start_sniffing, width=10)
+        self.start_button = tk.Button(frame2, text="Start", command=self.start_button_pressed, width=10)
         self.start_button.grid(row=3, column=0, padx=10, pady=10)
 
         # Stop Button
-        self.stop_button = tk.Button(frame2, text="Stop", command=self.parent.stop_sniffing, width=10, state=tk.DISABLED)
+        self.stop_button = tk.Button(frame2, text="Stop", command=self.stop_button_pressed, width=10, state=tk.DISABLED)
         self.stop_button.grid(row=3, column=1, padx=10, pady=10)
 
         # Detected Packet No.
@@ -152,9 +143,14 @@ class MainWidget:
         self.print_checkbox = tk.Checkbutton(frame2, text="Print Log", anchor="e", variable=self.print_flag)
         self.print_checkbox.grid(row=3, column=2, padx=10, pady=10)
 
-
-    # Start Button Pressed
     def start_button_pressed(self) -> None:
+        # Input Validation
+        if self.input_validation():
+            return
+        # Start Sniffing
+        if not self.parent.start_sniffing():
+            return
+        # GUI Disable & Initialize
         self.iface_combobox[0].config(state=tk.DISABLED)
         self.iface_combobox[1].config(state=tk.DISABLED)
         self.ip1_entry.config(state=tk.DISABLED)
@@ -162,13 +158,19 @@ class MainWidget:
         self.delay_entry.config(state=tk.DISABLED)
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
+        # Packet Monitoring Number
         self.pkt_detect_var.set("0")
         self.pkt_process_var.set("0")
         self.pkt_sent_var.set("0")
         self.toggle.disable()
 
-    # Stop Button Pressed
+        # [Sent Number Entry] Periodic Update
+        self.update_id = self.pkt_counts_update()
+
     def stop_button_pressed(self) -> None:
+        # Stop Sniffing
+        self.parent.stop_sniffing()
+        # GUI Enable
         self.iface_combobox[0].config(state="readonly")
         self.iface_combobox[1].config(state="readonly")
         self.ip1_entry.config(state=tk.NORMAL)
@@ -177,6 +179,33 @@ class MainWidget:
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.toggle.enable()
+
+        # Stop Updating <Sent Number Entry>
+        if self.update_id:
+            self.root.after_cancel(self.update_id)
+
+    # Input Validation
+    def input_validation(self):
+        try:
+            # Check Validation - Interface Selecting Box
+            if "" in self.iface_selected:
+                raise ValueError("InterfaceError")
+            # Check Validation -
+            if invalid_ip(self.ip1_entry.get()) or invalid_ip(self.ip2_entry.get()):
+                raise ValueError("IPAddressError")
+            if float(self.delay_entry.get()) < 0:
+                raise ValueError("DelayTimeError")
+
+        except ValueError as error:
+            error_type = str(error)
+            if error_type == "InterfaceError":
+                messagebox.showerror("Network Interface Error", "Please select the Network Interface")
+            elif error_type == "IPAddressError":
+                messagebox.showerror("Invalid IP Address", "IP Address entered in invalid format.\nex) 192.168.110.6")
+            elif error_type == "DelayTimeError":
+                messagebox.showerror("Delay Time Error", "Please enter a valid delay time in ms.\n(range ≥ 0)")
+            return True
+        return False
 
     # ComboBox List Expanded
     def update_interfaces(self, index):
@@ -196,50 +225,25 @@ class MainWidget:
         idx_selected = self.iface_combobox[if_num].current()
 
         iface = self.iface_list[idx_selected]
-
         self.iface_combobox[if_num].set(iface.display)
-
         self.iface_selected[if_num] = iface.name
-
         print(f"Interface {if_num + 1} Selected :", iface.display)
 
     # Sent Packet Number Update
-    def pkt_sent_entry_update(self):
-        if self.parent.stop_event.is_set(): return
-
+    def pkt_counts_update(self):
+        if self.parent.stop_event.is_set():
+            return
         # Get Sent Number from 'self.pkt_sent_num' (Shared Memory)
         with self.parent.pkt_sent_num.get_lock():
-            pkt_process_num = self.parent.pkt_process_num
-            pkt_sent_num = self.parent.pkt_sent_num.value
-
-            self.pkt_process_var.set(pkt_process_num - pkt_sent_num)
-            self.pkt_sent_var.set(pkt_sent_num)
+            self.pkt_process_var.set(self.parent.pkt_process_num - self.parent.pkt_sent_num.value)
+            self.pkt_sent_var.set(self.parent.pkt_sent_num.value)
 
         # Update Packet Monitoring
-        return self.root.after(100, self.pkt_sent_entry_update)  # Update Every 100 ms
+        return self.root.after(100, self.pkt_counts_update)  # Update Every 100 ms
+
+    def app_closing(self):
+        self.parent.stop_sniffing()
+        self.root.destroy()
 
 
-@dataclass
-class Interface:
-    ip : str
-    name : str
-    description : str
 
-    @classmethod
-    def check_valid(cls, ip, name, description):
-        # IPv4 valid check
-        try:
-            ip_obj = ipaddress.ip_address(ip)
-            if ip_obj.version != 4:
-                return None
-        except ValueError:
-            return None
-        # loopback name check
-        if "loopback" in name.lower():
-            return None
-
-        return cls(ip, name, description)
-
-    @property
-    def display(self):
-        return f"[{self.name}] {self.description} ({self.ip})"

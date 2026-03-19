@@ -1,11 +1,35 @@
 import os
 import psutil
 import time
+import ipaddress
+
 from collections import deque
+from dataclasses import dataclass
 
 import scapy.all as scapy
+scapy.conf.verb = 0
 
 Ether, IP, TCP, UDP, ICMP, ARP = scapy.Ether, scapy.IP, scapy.TCP, scapy.UDP, scapy.ICMP, scapy.ARP
+
+@dataclass
+class Interface:
+    ip : str
+    name : str
+    description : str
+
+    @property
+    def display(self):
+        return f"[{self.name}] {self.description} ({self.ip})"
+
+    @classmethod
+    def check_valid(cls, ip, name, description):
+        try:    # IPv4 valid check
+            if ipaddress.ip_address(ip).version != 4:   return None
+        except ValueError:  return None
+        # loopback name check
+        if "loopback" in name.lower():
+            return None
+        return cls(ip, name, description)
 
 def get_src_mac(interface):
     return scapy.get_if_hwaddr(interface)
@@ -29,41 +53,15 @@ def invalid_ip(ip_str):
         if int(ip) < 0 or int(ip) > 255: return True
     return False
 
-# Input Validation
-def input_validation(self):
-    try:
-        # Check Validation - Interface Selecting Box
-        if "" in self.iface_selected:
-            raise ValueError("InterfaceError")
-        # Check Validation -
-        if invalid_ip(self.ip1_entry.get()) or invalid_ip(self.ip2_entry.get()):
-            raise ValueError("IPAddressError")
-        if float(self.delay_entry.get()) < 0:
-            raise ValueError("DelayTimeError")
-
-    except ValueError as error:
-        error_type = str(error)
-        if error_type == "InterfaceError":
-            messagebox.showerror("Network Interface Error", "Please select the Network Interface")
-        elif error_type == "IPAddressError":
-            messagebox.showerror("Invalid IP Address","IP Address entered in invalid format.\nex) 192.168.110.6")
-        elif error_type == "DelayTimeError":
-            messagebox.showerror("Delay Time Error", "Please enter a valid delay time in ms.\n(range ≥ 0)")
-        return True
-    return False
-
 # Child Process
-def packet_delay_send(q_pkt_from_parent, stop_event, infos):
-    scapy.conf.verb = 0
-
+def packet_delay_send(infos):
     # Process Priority Elevation
     sub_pid = psutil.Process(os.getpid())
     sub_pid.nice(psutil.HIGH_PRIORITY_CLASS)
 
     # Information from Main Thread
-    delay_ms, iface_selected, pkt_sent_num = infos
+    que_from_parent, stop_event, delay_ms, iface_selected, pkt_sent_num = infos
 
-    # Delay time calculation with compensation
     delay = float(delay_ms) / 1000  # ms -> 초로 변환
 
     # Deque for saving (packet, start time)
@@ -72,7 +70,7 @@ def packet_delay_send(q_pkt_from_parent, stop_event, infos):
         # Get Packets from Parent Process
         try:
             while True:
-                pkt_deque.append(q_pkt_from_parent.get_nowait())
+                pkt_deque.append(que_from_parent.get_nowait())
         except Exception:
             pass
         # Check delayed time and send
@@ -81,10 +79,13 @@ def packet_delay_send(q_pkt_from_parent, stop_event, infos):
             if time.time() - start_time >= delay:
                 # Send Packets by Ethernet (Layer 2)
                 if pkt.sniffed_on == iface_selected[0]: scapy.sendp(pkt, iface=iface_selected[1]);
-                if pkt.sniffed_on == iface_selected[1]: scapy.sendp(pkt, iface=iface_selected[0]);
+                elif pkt.sniffed_on == iface_selected[1]: scapy.sendp(pkt, iface=iface_selected[0]);
                 pkt_deque.popleft()
                 # Sent Number Update
                 with pkt_sent_num.get_lock():
                     pkt_sent_num.value += 1
             else:
                 break
+
+def send_dummy_packet(iface):
+    scapy.sendp(Ether(dst="ff:ff:ff:ff:ff:ff") / IP(dst="255.255.255.255") / UDP(dport=9999), iface=iface)
