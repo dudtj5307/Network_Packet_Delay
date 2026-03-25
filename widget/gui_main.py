@@ -1,18 +1,25 @@
-import os, sys
-import multiprocessing
+from __future__ import annotations
 
-import scapy.all as scapy
+import os, sys, time
+from typing import TYPE_CHECKING
+
 from scapy.arch import get_windows_if_list
 
 import tkinter as tk
 from tkinter import ttk, Frame, messagebox
 
-from sniff_delay_tool import VERSION, MainProcess
+from core.constants import VERSION
 from widget.gui_switch import ToggleSwitch
-from utils.network import *
+from widget.gui_graph import SpeedGraph
+from models.interface import Interface
+from utils.network import invalid_ip
 
-DEFAULT_IP_ADDRESS_1 = '192.168.45.1'
-DEFAULT_IP_ADDRESS_2 = '192.168.45.1'
+if TYPE_CHECKING:
+    from core.process import MainProcess
+
+DEFAULT_IP_ADDRESS_1 = '192.168.110.6'
+DEFAULT_IP_ADDRESS_2 = '192.168.111.6'
+
 
 class MainWidget:
     def __init__(self, parent: MainProcess):
@@ -21,7 +28,7 @@ class MainWidget:
         self.root = tk.Tk()
 
         # Selected Mode
-        self.mode_selected = "Routing"      # Selected Mode
+        self.mode_selected = "Routing"
 
         # Selected Interface
         self.iface_selected = ["", ""]
@@ -35,18 +42,25 @@ class MainWidget:
         # GUI Sent Number Periodic Update
         self.update_id = ""
 
+        # Speed calculation state (bytes snapshot & timestamp)
+        self._speed_last_bytes = 0
+        self._speed_last_time  = 0.0
+
         # Flag for printing packets
         self.print_flag = tk.BooleanVar()
         self.print_flag.set(False)
 
         self.gui_setup()
 
+        # I/O Graph window (created after gui_setup so root exists)
+        self.speed_graph = SpeedGraph(self)
+
         # Called when closing 'SniffingApp'
         self.root.protocol("WM_DELETE_WINDOW", self.app_closing)
 
     def gui_setup(self) -> None:
         self.root.title(f"Delayed Packet Router {VERSION}")
-        self.root.geometry("610x260")
+        self.root.geometry("610x255")
         self.root.resizable(False, False)
         # Icon Setting
         run_path = sys._MEIPASS if getattr(sys, 'frozen', False) else os.getcwd()
@@ -58,7 +72,7 @@ class MainWidget:
         frame1.pack()
 
         # Toggle Switch for mode selection
-        self.toggle = ToggleSwitch(frame1, width=70, height=18) ;
+        self.toggle = ToggleSwitch(frame1, width=70, height=18)
         self.toggle.grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
         # Network Interface 1
@@ -143,6 +157,11 @@ class MainWidget:
         self.print_checkbox = tk.Checkbutton(frame2, text="Print Log", anchor="e", variable=self.print_flag)
         self.print_checkbox.grid(row=3, column=2, padx=10, pady=10)
 
+        # I/O Graph toggle button
+        self.graph_button = tk.Button(frame2, text="I/O Graph", width=10,
+                                      command=lambda: self.speed_graph.toggle())
+        self.graph_button.grid(row=3, column=3, padx=10, pady=10)
+
     def start_button_pressed(self) -> None:
         # Input Validation
         if self.input_validation():
@@ -162,6 +181,9 @@ class MainWidget:
         self.pkt_detect_var.set("0")
         self.pkt_process_var.set("0")
         self.pkt_sent_var.set("0")
+        self._speed_last_bytes = 0
+        self._speed_last_time  = 0.0
+        self.speed_graph.on_start()
         self.toggle.disable()
 
         # [Sent Number Entry] Periodic Update
@@ -183,14 +205,13 @@ class MainWidget:
         # Stop Updating <Sent Number Entry>
         if self.update_id:
             self.root.after_cancel(self.update_id)
+        self.speed_graph.on_stop()
 
     # Input Validation
     def input_validation(self) -> bool:
         try:
-            # Check Validation - Interface Selecting Box
             if "" in self.iface_selected:
                 raise ValueError("InterfaceError")
-            # Check Validation -
             if invalid_ip(self.ip1_entry.get()) or invalid_ip(self.ip2_entry.get()):
                 raise ValueError("IPAddressError")
             if float(self.delay_entry.get()) < 0:
@@ -209,7 +230,6 @@ class MainWidget:
 
     # ComboBox List Expanded
     def update_interfaces(self, iface_num: int) -> None:
-        # Update Network Interface
         self.iface_list = []
         for interface in get_windows_if_list():
             for ip in interface['ips']:
@@ -217,7 +237,6 @@ class MainWidget:
                 if iface is not None:
                     self.iface_list.append(iface)
 
-        # Update ComboBox List
         self.iface_combobox[iface_num]['values'] = [iface.display for iface in self.iface_list]
 
     # ComboBox Item Selected
@@ -229,22 +248,39 @@ class MainWidget:
         self.iface_selected[iface_num] = iface.name
         print(f"Interface {iface_num + 1} Selected :", iface.display)
 
-    # Sent Packet Number Update
+    # Sent Packet Number & TX Speed Update
     def pkt_counts_update(self) -> str | None:
         if self.parent.stop_event.is_set():
-            return
-        # Get Sent Number from 'self.pkt_sent_num' (Shared Memory)
-        with self.parent.pkt_sent_num.get_lock():
-            self.pkt_process_var.set(self.parent.pkt_process_num - self.parent.pkt_sent_num.value)
-            self.pkt_sent_var.set(self.parent.pkt_sent_num.value)
+            return None
 
-        # Update Packet Monitoring
-        return self.root.after(100, self.pkt_counts_update)  # Update Every 100 ms
+        with self.parent.pkt_sent_num.get_lock():
+            sent = self.parent.pkt_sent_num.value
+
+        self.pkt_detect_var.set(self.parent.pkt_detect_num)
+        self.pkt_process_var.set(self.parent.pkt_process_num - sent)
+        self.pkt_sent_var.set(sent)
+
+        # TX Speed calculation
+        now = time.time()
+        with self.parent.pkt_sent_bytes.get_lock():
+            current_bytes = self.parent.pkt_sent_bytes.value
+
+        if self._speed_last_time > 0:
+            elapsed = now - self._speed_last_time
+            if elapsed >= 1.0:                               # Speed sample: every 1 s
+                byte_delta = current_bytes - self._speed_last_bytes
+                speed_kbps = (byte_delta / elapsed) / 125   # SI: 1 byte/s = 1/125 KB/s
+                self.speed_graph.push(now, speed_kbps)
+                self._speed_last_bytes = current_bytes
+                self._speed_last_time  = now
+        else:
+            # First call — record baseline so next interval can calculate delta
+            self._speed_last_bytes = current_bytes
+            self._speed_last_time  = now
+
+        return self.root.after(100, self.pkt_counts_update)  # GUI update: every 100 ms
 
     def app_closing(self) -> None:
         if self.parent.is_sniffing:
             self.parent.stop_sniffing()
         self.root.destroy()
-
-
-
