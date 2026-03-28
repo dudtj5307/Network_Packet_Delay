@@ -37,6 +37,20 @@ class PacketHandler:
             return False
         return True
 
+    def send_proxy_arp(self, packet: Packet) -> None:
+        p = self.parent
+        iface = packet.sniffed_on
+        reply_hwsrc = p.src_mac1 if iface == p.widget.iface_selected[0] else p.src_mac2
+
+        arp_reply = (Ether(src=reply_hwsrc, dst=packet[ARP].hwsrc) /
+                     ARP(op=2,hwsrc=reply_hwsrc,       psrc=packet[ARP].pdst,
+                              hwdst=packet[ARP].hwsrc, pdst=packet[ARP].psrc))
+        scapy.sendp(arp_reply, iface=iface)
+
+        if p.widget.print_flag.get():
+            print(f"[Detected] ARP Request {packet[ARP].psrc} -> {packet[ARP].pdst} "
+                  f"[ARP Proxy] ARP Reply {packet[ARP].pdst} is at {reply_hwsrc}", flush=True)
+
     def pkt_cached(self, packet: Packet, pkt_chksum) -> bool:
         if (packet[IP].chksum, pkt_chksum) in self.pkt_cache:
             return True
@@ -51,13 +65,15 @@ class PacketHandler:
         if not packet.haslayer(Ether):
             return
 
-        # L2 Packets (ARP)
-        if packet.haslayer(ARP) and p.mode_selected == "Bridging":
+        # L2 Packets (ARP) - Proxy ARP Reply
+        if p.mode_selected == "Bridging" and packet.haslayer(ARP) and packet[ARP].op == 1:
             if self.arp_cached(packet):
                 return
-            if p.widget.print_flag.get():
-                print(f"[Detected] ARP {'Request' if packet.op==1 else 'Reply'} {packet.psrc} -> {packet.pdst} ",
-                      flush=True)
+
+            pkt_ip_src, pkt_ip_dst = packet[ARP].psrc, packet[ARP].pdst
+            if (pkt_ip_src == p.ip1 and pkt_ip_dst == p.ip2) or (pkt_ip_src == p.ip2 and pkt_ip_dst == p.ip1):
+                self.send_proxy_arp(packet)
+            return
 
         # L3 Packets (TCP, UDP, UDP-segments, ICMP)
         elif packet.haslayer(IP):
